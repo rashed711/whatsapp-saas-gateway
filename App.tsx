@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import {
-  LayoutDashboard, Key, QrCode, LogOut, CheckCircle2,
+  LayoutDashboard, Key, QrCode as QrIcon, LogOut, CheckCircle2,
   Send, Zap, Clock, Smartphone, RefreshCcw, Copy, AlertTriangle
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 
 const App = () => {
   const [status, setStatus] = useState<'disconnected' | 'connecting' | 'qr' | 'connected' | 'error'>('disconnected');
@@ -23,7 +24,7 @@ const App = () => {
 
   useEffect(() => {
     // Connect to backend
-    socketRef.current = io('http://localhost:3001');
+    socketRef.current = io('http://localhost:3050');
 
     socketRef.current.on('connect', () => {
       addLog('تم الاتصال بالسيرفر الخلفي.', 'success');
@@ -43,8 +44,10 @@ const App = () => {
       }
     });
 
-    socketRef.current.on('qr', (dataUrl: string) => {
-      setQrCode(dataUrl);
+    socketRef.current.on('qr', (qrData: string) => {
+      // Clean up the string just in case, though Baileys sends raw string usually
+      const cleanQR = qrData.replace('data:image/png;base64,', '');
+      setQrCode(cleanQR);
       addLog('تم استلام رمز QR جديد.', 'info');
     });
 
@@ -81,7 +84,11 @@ const App = () => {
       case 'qr':
         return (
           <div className="text-center p-2">
-            <img src={qrCode!} className="mx-auto mb-4 border-4 p-1 bg-white border-white rounded-lg shadow-xl" alt="QR Code" />
+            {qrCode ? (
+              <QRCodeSVG value={qrCode} size={256} className="mx-auto mb-4 border-4 p-1 bg-white border-white rounded-lg shadow-xl" />
+            ) : (
+              <div className="mx-auto mb-4 w-64 h-64 bg-slate-200 animate-pulse rounded-lg"></div>
+            )}
             <p className="text-xs font-bold text-slate-600">امسح الرمز باستخدام واتساب</p>
           </div>
         );
@@ -143,7 +150,7 @@ const App = () => {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm h-fit">
-              <h3 className="font-bold mb-6 flex items-center gap-2"><QrCode size={18} className="text-emerald-500" /> ربط جهاز واتساب</h3>
+              <h3 className="font-bold mb-6 flex items-center gap-2"><QrIcon size={18} className="text-emerald-500" /> ربط جهاز واتساب</h3>
               <div className="aspect-square bg-slate-100 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center relative">
                 {renderConnectionStatus()}
               </div>

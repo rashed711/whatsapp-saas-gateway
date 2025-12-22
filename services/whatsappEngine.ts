@@ -8,7 +8,7 @@
 // للتعامل مع المفاتيح المشفرة داخل MongoDB.
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import P from 'pino';
-import QRCode from 'qrcode';
+
 
 
 export class WhatsAppEngine {
@@ -63,9 +63,11 @@ export class WhatsAppEngine {
     // مراقبة تحديثات الاتصال
     // مراقبة تحديثات الاتصال واستلام الـ QR
     sock.ev.on('connection.update', async (update) => {
+      console.log('[Engine] Connection update received:', { connection: update.connection, hasQR: !!update.qr });
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
+        console.log('[Engine] QR Code string received from Baileys');
         // Baileys يرسل الـ QR هنا
         const qrDataUrl = `data:image/png;base64,${qr}`;
         onQR(qrDataUrl);

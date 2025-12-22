@@ -1,7 +1,7 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { WhatsAppEngine } from './services/whatsappEngine.js';
+import { WhatsAppEngine } from './services/whatsappEngine.ts';
 
 const app = express();
 const httpServer = createServer(app);
@@ -47,7 +47,7 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = 3001;
+const PORT = 3050;
 httpServer.listen(PORT, () => {
     console.log(`Backend Server running on port ${PORT}`);
 });
