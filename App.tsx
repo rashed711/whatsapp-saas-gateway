@@ -14,32 +14,33 @@ const App = () => {
   });
   const [status, setStatus] = useState<'disconnected' | 'connecting' | 'qr' | 'connected' | 'error'>('disconnected');
   const [qrCode, setQrCode] = useState<string | null>(null);
-  const socketRef = useRef<any>(null);
+  const [socket, setSocket] = useState<any>(null);
 
   useEffect(() => {
-    socketRef.current = io('http://localhost:3050');
+    const newSocket = io(import.meta.env.VITE_API_URL || 'http://localhost:3050');
+    setSocket(newSocket);
 
-    socketRef.current.on('status', (newStatus: any) => {
+    newSocket.on('status', (newStatus: any) => {
       setStatus(newStatus);
     });
 
-    socketRef.current.on('qr', (qrData: string) => {
+    newSocket.on('qr', (qrData: string) => {
       const cleanQR = qrData.replace('data:image/png;base64,', '');
       setQrCode(cleanQR);
     });
 
     return () => {
-      socketRef.current.disconnect();
+      newSocket.disconnect();
     };
   }, []);
 
   const handleStartConnection = () => {
-    socketRef.current?.emit('start-session');
+    socket?.emit('start-session');
   };
 
   const handleLogout = () => {
     if (confirm('هل أنت متأكد أنك تريد تسجيل الخروج؟')) {
-      socketRef.current?.emit('logout');
+      socket?.emit('logout');
     }
   };
 
@@ -71,18 +72,10 @@ const App = () => {
         }} />} />
 
         <Route element={<DashboardLayout />}>
-          <Route path="/" element={<Dashboard socket={socketRef.current} />} />
-          <Route path="/devices" element={
-            <Devices
-              socket={socketRef.current}
-              status={status}
-              qrCode={qrCode}
-              onStartSession={handleStartConnection}
-              onLogout={handleLogout}
-            />
-          } />
-          <Route path="/campaigns" element={<Campaigns socket={socketRef.current} status={status} />} />
-          <Route path="/api" element={<ApiDocs />} />
+          <Route path="/" element={<Dashboard socket={socket} />} />
+          <Route path="/devices" element={<Devices socket={socket} />} />
+          <Route path="/campaigns" element={<Campaigns socket={socket} />} />
+          <Route path="/api-docs" element={<ApiDocs />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

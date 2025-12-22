@@ -15,11 +15,13 @@ import { getLinkPreview } from 'link-preview-js';
 
 export class WhatsAppEngine {
   private userId: string;
+  private sessionId: string;
   private status: 'IDLE' | 'QR' | 'CONNECTED' | 'ERROR' = 'IDLE';
   private sock: any = null;
 
-  constructor(userId: string) {
+  constructor(userId: string, sessionId: string) {
     this.userId = userId;
+    this.sessionId = sessionId;
   }
 
   /**
@@ -27,9 +29,9 @@ export class WhatsAppEngine {
    * تقوم بتحويل JSON المخزن إلى مفاتيح Buffer صالحة لـ Baileys.
    */
   async getAuthFromDB() {
-    console.log(`[DB] محاولة استعادة الجلسة لـ ${this.userId}...`);
+    console.log(`[DB] محاولة استعادة الجلسة لـ ${this.userId}:${this.sessionId}...`);
     // Logic: 
-    // const session = await SessionModel.findOne({ userId: this.userId });
+    // const session = await SessionModel.findOne({ userId: this.userId, sessionId: this.sessionId });
     // if (session) return BufferJSON.revive(session.authData);
     return null;
   }
@@ -40,7 +42,7 @@ export class WhatsAppEngine {
   async saveAuthToDB(authData: any) {
     console.log(`[DB] جاري مزامنة بيانات التشفير سحابياً...`);
     // Logic:
-    // await SessionModel.updateOne({ userId: this.userId }, { authData: BufferJSON.stringify(authData) }, { upsert: true });
+    // await SessionModel.updateOne({ userId: this.userId, sessionId: this.sessionId }, { authData: BufferJSON.stringify(authData) }, { upsert: true });
   }
 
   /**
@@ -48,52 +50,58 @@ export class WhatsAppEngine {
    */
   async startSession(onQR: (qr: string) => void, onConnected: () => void) {
     this.status = 'QR';
-    console.log('[Engine] Starting Baileys socket...');
+    console.log(`[Engine] Starting Baileys socket for session ${this.sessionId}...`);
 
-    // إنشاء حالة المصادقة (تُحفظ في مجلد auth_<userId>)
-    const { state, saveCreds } = await useMultiFileAuthState(`./auth_${this.userId}`);
+    try {
+      const authPath = `./auth_${this.userId}/${this.sessionId}`;
+      // Ensure directory exists
+      await fs.mkdir(authPath, { recursive: true });
 
-    // إنشاء socket للواتساب
-    this.sock = makeWASocket({
-      auth: state,
-      printQRInTerminal: false,
-      logger: P({ level: 'silent' })
-    });
-    const sock = this.sock;
+      // إنشاء حالة المصادقة
+      const { state, saveCreds } = await useMultiFileAuthState(authPath);
 
-    // إرسال QR كـ data URL للواجهة الأمامية
-    // (تم الدمج مع connection.update)
+      // إنشاء socket للواتساب
+      this.sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        logger: P({ level: 'info' }), // Enable info logging to debug
+        browser: ['WhatsApp Gateway', 'Chrome', '1.0.0']
+      });
 
-    // مراقبة تحديثات الاتصال
-    // مراقبة تحديثات الاتصال واستلام الـ QR
-    sock.ev.on('connection.update', async (update) => {
-      console.log('[Engine] Connection update received:', { connection: update.connection, hasQR: !!update.qr });
-      const { connection, lastDisconnect, qr } = update;
+      // مراقبة تحديثات الاتصال واستلام الـ QR
+      this.sock.ev.on('connection.update', async (update) => {
+        console.log('[Engine] Connection update received:', { connection: update.connection, hasQR: !!update.qr });
+        const { connection, lastDisconnect, qr } = update;
 
-      if (qr) {
-        console.log('[Engine] QR Code string received from Baileys');
-        // Baileys يرسل الـ QR هنا
-        const qrDataUrl = `data:image/png;base64,${qr}`;
-        onQR(qrDataUrl);
-      }
-      if (connection === 'open') {
-        this.status = 'CONNECTED';
-        onConnected();
-        await saveCreds();
-      } else if (connection === 'close') {
-        const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
-        if (shouldReconnect) {
-          console.log('[Engine] Reconnecting...');
-          this.startSession(onQR, onConnected);
-        } else {
-          console.log('[Engine] Connection closed, logged out.');
-          this.status = 'ERROR';
+        if (qr) {
+          console.log('[Engine] QR Code string received from Baileys');
+          const qrDataUrl = `data:image/png;base64,${qr}`;
+          onQR(qrDataUrl);
         }
-      }
-    });
+        if (connection === 'open') {
+          this.status = 'CONNECTED';
+          onConnected();
+          await saveCreds();
+        } else if (connection === 'close') {
+          const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
+          if (shouldReconnect) {
+            console.log('[Engine] Reconnecting...');
+            this.startSession(onQR, onConnected);
+          } else {
+            console.log('[Engine] Connection closed, logged out.');
+            this.status = 'ERROR';
+          }
+        }
+      });
 
-    // حفظ بيانات الاعتماد عند تحديثها
-    sock.ev.on('creds.update', saveCreds);
+      // حفظ بيانات الاعتماد عند تحديثها
+      this.sock.ev.on('creds.update', saveCreds);
+
+    } catch (error) {
+      console.error('[Engine] Failed to start session:', error);
+      this.status = 'ERROR';
+      throw error; // Re-throw to let server know
+    }
   }
 
   async send(to: string, type: 'text' | 'image' | 'audio' | 'video' | 'document', content: string, caption?: string) {
@@ -186,8 +194,8 @@ export class WhatsAppEngine {
     } finally {
       // Force cleanup auth folder
       try {
-        await fs.rm(`./auth_${this.userId}`, { recursive: true, force: true });
-        console.log('[Engine] Auth session cleared.');
+        await fs.rm(`./auth_${this.userId}/${this.sessionId}`, { recursive: true, force: true });
+        console.log(`[Engine] Auth session ${this.sessionId} cleared.`);
         this.status = 'IDLE';
       } catch (err) {
         console.error('[Engine] Failed to delete auth folder:', err);

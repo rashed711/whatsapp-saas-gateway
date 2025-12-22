@@ -13,8 +13,42 @@ const io = new Server(httpServer, {
     }
 });
 
-// متغير لتخزين محرك الواتساب (يمكن تطويره ليدعم جلسات متعددة)
-const engine = new WhatsAppEngine('master-session');
+import fs from 'fs/promises';
+
+// Session Management
+interface Session {
+    id: string;
+    name: string;
+    engine: WhatsAppEngine;
+}
+
+const sessions = new Map<string, Session>();
+const SESSIONS_FILE = './sessions.json';
+
+// Helper: Load sessions from disk
+const loadSessions = async () => {
+    try {
+        const data = await fs.readFile(SESSIONS_FILE, 'utf-8');
+        const storedSessions = JSON.parse(data);
+        for (const s of storedSessions) {
+            const engine = new WhatsAppEngine('master-user', s.id);
+            sessions.set(s.id, { id: s.id, name: s.name, engine });
+            // Optionally auto-connect here if needed, but for now we wait for user action
+        }
+        console.log(`Loaded ${sessions.size} sessions.`);
+    } catch (error) {
+        console.log('No sessions found, starting fresh.');
+    }
+};
+
+// Helper: Save sessions to disk
+const saveSessions = async () => {
+    const data = Array.from(sessions.values()).map(s => ({ id: s.id, name: s.name }));
+    await fs.writeFile(SESSIONS_FILE, JSON.stringify(data, null, 2));
+};
+
+// Initialize
+loadSessions();
 
 // Stats (Mock/Simple In-Memory)
 let stats = {
@@ -31,7 +65,7 @@ app.get('/stats', (req, res) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.json({
         messagesToday: stats.messagesToday,
-        activeDevices: engine.currentStatus === 'CONNECTED' ? 1 : 0,
+        activeDevices: Array.from(sessions.values()).filter(s => s.engine.currentStatus === 'CONNECTED').length,
         uptime: uptimeStr
     });
 });
@@ -39,33 +73,82 @@ app.get('/stats', (req, res) => {
 io.on('connection', (socket) => {
     console.log('Frontend connected:', socket.id);
 
-    socket.on('start-session', async () => {
-        console.log('Request to start session received.');
-        try {
-            // إخبار الواجهة أننا بدأنا
-            socket.emit('status', 'connecting');
+    // List Sessions
+    socket.on('list-sessions', () => {
+        const sessionList = Array.from(sessions.values()).map(s => ({
+            id: s.id,
+            name: s.name,
+            status: s.engine.currentStatus
+        }));
+        socket.emit('sessions-list', sessionList);
+    });
 
-            await engine.startSession(
+    // Create Session
+    socket.on('create-session', async ({ name }, callback) => {
+        const sessionId = 'sess_' + Date.now();
+        const engine = new WhatsAppEngine('master-user', sessionId);
+        sessions.set(sessionId, { id: sessionId, name, engine });
+        await saveSessions();
+
+        socket.emit('session-created', { id: sessionId, name, status: 'IDLE' });
+        // Trigger list update for all clients
+        io.emit('sessions-updated');
+
+        // Callback if provided
+        if (typeof callback === 'function') {
+            callback({ sessionId });
+        }
+    });
+
+    // Delete Session
+    socket.on('delete-session', async ({ sessionId }) => {
+        const session = sessions.get(sessionId);
+        if (session) {
+            await session.engine.logout(); // Cleans up auth folder
+            sessions.delete(sessionId);
+            await saveSessions();
+            io.emit('sessions-updated');
+        }
+    });
+
+    // Start Session (Connect)
+    socket.on('start-session', async ({ sessionId }) => {
+        console.log(`Request to start session ${sessionId}`);
+        const session = sessions.get(sessionId);
+        if (!session) return socket.emit('error', 'Session not found');
+
+        try {
+            socket.emit('session-status', { sessionId, status: 'connecting' });
+
+            await session.engine.startSession(
                 (qrCodeDataUrl) => {
-                    console.log('QR Code generated.');
-                    socket.emit('qr', qrCodeDataUrl);
-                    socket.emit('status', 'qr');
+                    socket.emit('session-qr', { sessionId, qr: qrCodeDataUrl });
+                    socket.emit('session-status', { sessionId, status: 'qr' });
+                    io.emit('sessions-updated'); // Ensure list reflects QR status
                 },
                 () => {
-                    console.log('WhatsApp Connected!');
-                    socket.emit('status', 'connected');
+                    console.log(`Session ${sessionId} connected!`);
+                    socket.emit('session-status', { sessionId, status: 'connected' });
+                    io.emit('sessions-updated'); // Update list status
                 }
             );
         } catch (error) {
             console.error('Session start error:', error);
-            socket.emit('status', 'error');
+            socket.emit('session-status', { sessionId, status: 'error' });
         }
     });
 
-    // استقبال طلب إرسال رسالة
+    // Send Message
     socket.on('send-message', async (data) => {
-        console.log('Message request received:', data);
-        const { numbers, type, content, caption, minDelay = 3, maxDelay = 10 } = data;
+        const { sessionId, numbers, type, content, caption, minDelay = 3, maxDelay = 10 } = data;
+        const session = sessions.get(sessionId);
+
+        if (!session) {
+            socket.emit('message-status', { error: 'Invalid Session ID' });
+            return;
+        }
+
+        console.log(`Message request for session ${sessionId}:`, data);
 
         // Validation
         if (!numbers || !Array.isArray(numbers) || numbers.length === 0) {
@@ -75,66 +158,82 @@ io.on('connection', (socket) => {
 
         const replaceVariables = (text: string) => {
             if (!text) return text;
-            // Replace {{id}} with a random number
             return text.replace(/{{id}}/g, () => Math.floor(Math.random() * 900000 + 100000).toString());
         };
 
-        // Process queue with delay
         let successCount = 0;
         let failCount = 0;
 
-        // Normalization Helper
         const normalizeNumber = (num: string) => {
+            if (!num) return '';
             const clean = num.replace(/\D/g, '');
-            // Egypt: 010xxxx -> 2010xxxx
-            if (clean.startsWith('01') && clean.length === 11) {
-                return '20' + clean.substring(1);
-            }
+            if (clean.startsWith('01') && clean.length === 11) return '20' + clean.substring(1);
             return clean;
         };
 
-        // Deduplicate Numbers
-        const uniqueNumbers = [...new Set(numbers.map((n: string) => normalizeNumber(n)))];
-        console.log(`Received ${numbers.length} numbers, processing ${uniqueNumbers.length} unique numbers.`);
+        const uniqueNumbers = [...new Set(
+            numbers.map((n: string) => normalizeNumber(n)).filter((n: string) => n.length >= 10)
+        )];
+
+        console.log(`[Batch] Received ${numbers.length} numbers. Unique valid targets: ${uniqueNumbers.length}`);
+
+        if (uniqueNumbers.length === 0) {
+            socket.emit('message-status', { error: 'No valid numbers found after normalization' });
+            return;
+        }
+
+        // Notify client of actual start (Broadcast so all tabs/reconnected clients see it)
+        io.emit('message-progress', {
+            sessionId,
+            current: 0,
+            total: uniqueNumbers.length,
+            status: 'starting'
+        });
 
         for (const [index, number] of uniqueNumbers.entries()) {
             try {
-                // Add random delay if specified (skip for first message)
                 if (index > 0) {
                     const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1) + minDelay);
-                    console.log(`Waiting for ${delay} seconds before sending to next...`);
+                    console.log(`[Batch] Waiting ${delay}s before next message...`);
                     await new Promise(resolve => setTimeout(resolve, delay * 1000));
                 }
 
-                console.log(`Processing unique number: ${number}`);
+                console.log(`[Batch] Processing ${index + 1}/${uniqueNumbers.length}: ${number}`);
                 const finalNumber = number;
 
-                // Validate Number with 10s Timeout
+                // Validate
                 try {
+                    console.log(`[Batch] Validating ${finalNumber}...`);
                     const isValid = await Promise.race([
-                        engine.validateNumber(finalNumber),
-                        new Promise<boolean>((_, reject) => setTimeout(() => reject(new Error('Validation timeout')), 10000))
+                        session.engine.validateNumber(finalNumber),
+                        // Increased timeout and handle rejection gracefully
+                        new Promise<boolean>((_, reject) => setTimeout(() => reject(new Error('Validation timeout')), 15000))
                     ]);
 
                     if (!isValid) {
+                        console.warn(`[Batch] Number ${finalNumber} is not active on WhatsApp.`);
                         throw new Error("Number not active on WhatsApp");
                     }
                 } catch (valError) {
                     throw new Error(`Validation failed: ${(valError as any).message}`);
                 }
 
-                // Personalize content
+                // Send
+                console.log(`[Batch] Sending to ${finalNumber}...`);
                 const personalizedContent = type === 'text' ? replaceVariables(content) : content;
                 const personalizedCaption = replaceVariables(caption);
 
-                // Race between send and 20s timeout
                 await Promise.race([
-                    engine.send(finalNumber, type, personalizedContent, personalizedCaption),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout')), 20000))
+                    session.engine.send(finalNumber, type, personalizedContent, personalizedCaption),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout')), 40000))
                 ]);
+
+                console.log(`[Batch] Sent to ${finalNumber} successfully.`);
                 successCount++;
                 stats.messagesToday++;
-                socket.emit('message-progress', {
+                // Broadcast progress
+                io.emit('message-progress', {
+                    sessionId,
                     current: index + 1,
                     total: uniqueNumbers.length,
                     lastNumber: number,
@@ -142,9 +241,11 @@ io.on('connection', (socket) => {
                 });
 
             } catch (error) {
-                console.error(`Failed to send to ${number}:`, error);
+                console.error(`[Batch] Failed to send to ${number}:`, error);
                 failCount++;
-                socket.emit('message-progress', {
+                // Broadcast failure
+                io.emit('message-progress', {
+                    sessionId,
                     current: index + 1,
                     total: uniqueNumbers.length,
                     lastNumber: number,
@@ -154,14 +255,19 @@ io.on('connection', (socket) => {
             }
         }
 
-        socket.emit('message-complete', { success: successCount, failed: failCount });
+        console.log(`[Batch] Finished. Success: ${successCount}, Failed: ${failCount}`);
+        // Broadcast complete
+        io.emit('message-complete', { sessionId, success: successCount, failed: failCount });
     });
 
-    // يمكن إضافة المزيد من الأحداث هنا مثل قطع الاتصال
-    socket.on('logout', async () => {
-        console.log('Logout request received');
-        await engine.logout();
-        socket.emit('status', 'disconnected');
+    // Logout
+    socket.on('logout', async ({ sessionId }) => {
+        const session = sessions.get(sessionId);
+        if (session) {
+            await session.engine.logout();
+            socket.emit('session-status', { sessionId, status: 'disconnected' });
+            io.emit('sessions-updated');
+        }
     });
 });
 

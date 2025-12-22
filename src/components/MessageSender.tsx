@@ -4,7 +4,7 @@ import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
 
 interface MessageSenderProps {
     socket: any;
-    status: string;
+    status: string; // Keep for backward compatibility or future use, but passed as empty from Campaigns
 }
 
 const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
@@ -20,6 +20,95 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
     const [progress, setProgress] = useState<{ current: number; total: number; status: string } | null>(null);
     const [report, setReport] = useState<{ success: number; failed: number; failedNumbers: { number: string, reason: string }[] }>({ success: 0, failed: 0, failedNumbers: [] });
 
+    const [selectedSessionId, setSelectedSessionId] = useState<string>('');
+    const [sessions, setSessions] = useState<{ id: string, name: string, status: string }[]>([]);
+    // Debug State
+    const [debugLog, setDebugLog] = useState<string[]>([]);
+
+    React.useEffect(() => {
+        if (!socket) return;
+
+        const refreshSessions = () => {
+            socket.emit('list-sessions');
+        };
+
+        refreshSessions();
+
+        const handleList = (list: any[]) => {
+            setSessions(list);
+            if (!selectedSessionId) {
+                const connected = list.find(s => s.status === 'CONNECTED');
+                if (connected) setSelectedSessionId(connected.id);
+            }
+        };
+
+        const handleSessionStatus = ({ sessionId, status }: any) => {
+            setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status } : s));
+        };
+
+        socket.on('sessions-list', handleList);
+        socket.on('sessions-updated', refreshSessions);
+        socket.on('session-status', handleSessionStatus);
+
+        return () => {
+            socket.off('sessions-list', handleList);
+            socket.off('sessions-updated', refreshSessions);
+            socket.off('session-status', handleSessionStatus);
+        };
+    }, [socket, selectedSessionId]);
+
+    // Independent listener for message progress to avoid dependency cycles
+    React.useEffect(() => {
+        if (!socket) return;
+
+        const handleProgress = (data: any) => {
+            try {
+                setDebugLog(prev => [`[Progress ${data.status.toUpperCase()}] ${data.current}/${data.total}`, ...prev].slice(0, 10));
+
+                setProgress({
+                    current: data.current || 0,
+                    total: data.total || 0,
+                    status: data.status || 'unknown'
+                });
+
+                if (data.status === 'success') {
+                    setReport(prev => ({ ...prev, success: prev.success + 1 }));
+                } else if (data.status === 'failed') {
+                    setReport(prev => ({
+                        ...prev,
+                        failed: prev.failed + 1,
+                        failedNumbers: [...prev.failedNumbers, { number: data.lastNumber, reason: data.error }]
+                    }));
+                }
+            } catch (err) {
+                console.error('Error in handleProgress:', err);
+                setDebugLog(prev => [`[ERROR]: ${(err as Error).message}`, ...prev]);
+            }
+        };
+
+        const handleComplete = (data: any) => {
+            try {
+                setDebugLog(prev => [`[Complete] Success: ${data.success}`, ...prev]);
+                setSending(false);
+                alert(`تم الانتهاء! نجاح: ${data.success}, فشل: ${data.failed}`);
+            } catch (err) {
+                console.error('Error in handleComplete:', err);
+            }
+        };
+
+        // Remove any existing listeners first to prevent duplicates
+        socket.off('message-progress');
+        socket.off('message-complete');
+
+        socket.on('message-progress', handleProgress);
+        socket.on('message-complete', handleComplete);
+
+        return () => {
+            socket.off('message-progress', handleProgress);
+            socket.off('message-complete', handleComplete);
+        };
+    }, [socket]); // Only re-run if socket object changes
+
     const handleRemoveDuplicates = () => {
         const list = numbers.split('\n').map(n => n.trim()).filter(n => n.length > 0);
         const unique = [...new Set(list)];
@@ -31,8 +120,6 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
         const file = e.target.files?.[0];
         if (file) {
             setFileName(file.name);
-            // Optional: Default caption to filename if empty? 
-            // setMessageContent(prev => prev || file.name); 
             const reader = new FileReader();
             reader.onloadend = () => {
                 setFileBase64(reader.result as string);
@@ -82,16 +169,23 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
         const newText = text.substring(0, start) + formatted + text.substring(end);
         setMessageContent(newText);
 
-        // Restore focus (optional, but good for UX)
         setTimeout(() => {
             textarea.focus();
-            textarea.setSelectionRange(start + 1, end + 1); // approximate cursor placement
+            textarea.setSelectionRange(start + 1, end + 1);
         }, 0);
     };
 
+    // Submit handler
     const handleSend = () => {
-        if (status !== 'connected') {
-            alert('يجب ربط الجهاز أولاً');
+        if (!selectedSessionId) {
+            alert('الرجاء اختيار جهاز للإرسال منه');
+            return;
+        }
+
+        // Verify session is connected
+        const session = sessions.find(s => s.id === selectedSessionId);
+        if (session?.status !== 'CONNECTED') {
+            alert('الجهاز المحدد غير متصل!');
             return;
         }
 
@@ -111,57 +205,49 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
         setProgress({ current: 0, total: numbersList.length, status: 'starting' });
 
         socket.emit('send-message', {
+            sessionId: selectedSessionId,
             numbers: numbersList,
             type: messageType,
             content: messageType === 'text' ? messageContent : fileBase64,
-            caption: messageContent, // Use messageContent as caption for media
+            caption: messageContent,
             minDelay: parseInt(minDelay.toString()),
             maxDelay: parseInt(maxDelay.toString())
         });
     };
 
-    // Listen for progress updates (would typically be in useEffect here or parent)
-    React.useEffect(() => {
-        if (!socket) return;
+    // Derived status for UI
+    const selectedSession = sessions.find(s => s.id === selectedSessionId);
+    const isConnected = selectedSession?.status === 'CONNECTED';
 
-        socket.on('message-progress', (data: any) => {
-            setProgress({
-                current: data.current,
-                total: data.total,
-                status: data.status
-            });
-
-            if (data.status === 'success') {
-                setReport(prev => ({ ...prev, success: prev.success + 1 }));
-            } else if (data.status === 'failed') {
-                setReport(prev => ({
-                    ...prev,
-                    failed: prev.failed + 1,
-                    failedNumbers: [...prev.failedNumbers, { number: data.lastNumber, reason: data.error }]
-                }));
-            }
-        });
-
-        socket.on('message-complete', () => {
-            setSending(false);
-            alert('تم الانتهاء من الإرسال!');
-        });
-
-        return () => {
-            socket.off('message-progress');
-            socket.off('message-complete');
-        };
-    }, [socket]);
+    // ... useEffect for progress ...
 
     return (
         <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+            {/* ... Header ... */}
             <h3 className="font-bold mb-6 flex items-center gap-2 text-slate-800">
                 <Send size={20} className="text-emerald-500" /> إرسال رسائل جماعية
             </h3>
 
             <div className="space-y-4">
+                {/* Session Selector */}
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">اختر الجهاز المرسل</label>
+                    <select
+                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:border-emerald-500 transition-colors"
+                        value={selectedSessionId}
+                        onChange={(e) => setSelectedSessionId(e.target.value)}
+                    >
+                        <option value="">-- اختر جهاز --</option>
+                        {sessions.map(s => (
+                            <option key={s.id} value={s.id}>
+                                {s.name} ({s.status === 'CONNECTED' ? 'متصل' : 'غير متصل'})
+                            </option>
+                        ))}
+                    </select>
+                </div>
                 {/* Numbers Input */}
                 <div>
+                    {/* ... Reuse existing ... */}
                     <div className="flex justify-between items-center mb-1">
                         <label className="block text-xs font-bold text-slate-500">الأرقام (رقم في كل سطر)</label>
                         <button onClick={handleRemoveDuplicates} className="text-xs text-blue-500 hover:text-blue-600 font-bold flex items-center gap-1">
@@ -176,6 +262,7 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
                     ></textarea>
                 </div>
 
+                {/* ... Message Type & Content ... */}
                 {/* Message Type Selector */}
                 <div className="flex gap-2 bg-slate-50 p-1 rounded-xl border border-slate-200">
                     {(['text', 'image', 'document', 'video', 'audio'] as const).map(type => (
@@ -192,6 +279,7 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
 
                 {/* Unified Content Input Area */}
                 <div className="relative">
+                    {/* ... Toolbar ... */}
                     <div className="flex justify-between items-center mb-1">
                         <label className="text-xs font-bold text-slate-500">
                             {messageType === 'text' ? 'نص الرسالة' : 'تسمية توضيحية (Caption)'}
@@ -264,9 +352,9 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
                 )}
 
                 {/* Connection Status Warning */}
-                {status !== 'connected' && (
+                {(!selectedSessionId || !isConnected) && (
                     <div className="bg-amber-50 text-amber-600 p-3 rounded-lg text-xs font-bold flex items-center gap-2">
-                        <AlertCircle size={16} /> يجب ربط الجهاز قبل الإرسال
+                        <AlertCircle size={16} /> {!selectedSessionId ? 'الرجاء اختيار جهاز أولاً' : 'الجهاز المحدد غير متصل'}
                     </div>
                 )}
 
@@ -295,7 +383,7 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
 
                     <button
                         onClick={handleSend}
-                        disabled={sending || status !== 'connected'}
+                        disabled={sending || !isConnected}
                         className="flex-1 bg-emerald-500 text-white font-bold py-3 px-6 rounded-xl hover:bg-emerald-600 transition-all shadow-lg hover:shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
                         {sending ? 'جاري الإرسال...' : 'إرسال الحملة'} <Send size={18} />
@@ -318,6 +406,7 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
                     </div>
                 )}
 
+                {/* Report Summary */}
                 {/* Report Summary */}
                 {(report.success > 0 || report.failed > 0) && (
                     <div className="mt-4 bg-slate-50 rounded-xl p-4 border border-slate-200">
@@ -349,6 +438,15 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
                     </div>
                 )}
 
+                {/* Debug Log */}
+                {debugLog.length > 0 && (
+                    <div className="mt-4 p-3 bg-black text-green-400 text-xs font-mono rounded-lg overflow-hidden">
+                        <p className="font-bold text-white mb-2">System Logs:</p>
+                        {debugLog.map((log, i) => (
+                            <div key={i}>{log}</div>
+                        ))}
+                    </div>
+                )}
             </div>
         </div>
     );
