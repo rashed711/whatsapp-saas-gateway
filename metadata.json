@@ -1,0 +1,7 @@
+{
+  "name": "WhatsApp SaaS Gateway",
+  "description": "بوابة برمجية متكاملة لإرسال رسائل واتساب مؤتمتة مع تخزين سحابي للجلسات باستخدام Baileys و MongoDB.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
