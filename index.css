@@ -1,0 +1,10 @@
+/* Global CSS file for WhatsApp SaaS Gateway */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Tajawal', sans-serif;
+}
