@@ -83,7 +83,21 @@ io.on('connection', (socket) => {
         let successCount = 0;
         let failCount = 0;
 
-        for (const [index, number] of numbers.entries()) {
+        // Normalization Helper
+        const normalizeNumber = (num: string) => {
+            const clean = num.replace(/\D/g, '');
+            // Egypt: 010xxxx -> 2010xxxx
+            if (clean.startsWith('01') && clean.length === 11) {
+                return '20' + clean.substring(1);
+            }
+            return clean;
+        };
+
+        // Deduplicate Numbers
+        const uniqueNumbers = [...new Set(numbers.map((n: string) => normalizeNumber(n)))];
+        console.log(`Received ${numbers.length} numbers, processing ${uniqueNumbers.length} unique numbers.`);
+
+        for (const [index, number] of uniqueNumbers.entries()) {
             try {
                 // Add random delay if specified (skip for first message)
                 if (index > 0) {
@@ -92,29 +106,37 @@ io.on('connection', (socket) => {
                     await new Promise(resolve => setTimeout(resolve, delay * 1000));
                 }
 
-                const cleanNumber = number.replace(/\D/g, ''); // Extract only digits
-                console.log(`Sending to cleaned number: ${cleanNumber}`);
+                console.log(`Processing unique number: ${number}`);
+                const finalNumber = number;
 
-                // Validate Number
-                const isValid = await engine.validateNumber(cleanNumber);
-                if (!isValid) {
-                    throw new Error("Number not active on WhatsApp");
+                // Validate Number with 10s Timeout
+                try {
+                    const isValid = await Promise.race([
+                        engine.validateNumber(finalNumber),
+                        new Promise<boolean>((_, reject) => setTimeout(() => reject(new Error('Validation timeout')), 10000))
+                    ]);
+
+                    if (!isValid) {
+                        throw new Error("Number not active on WhatsApp");
+                    }
+                } catch (valError) {
+                    throw new Error(`Validation failed: ${(valError as any).message}`);
                 }
 
                 // Personalize content
                 const personalizedContent = type === 'text' ? replaceVariables(content) : content;
                 const personalizedCaption = replaceVariables(caption);
 
-                // Race between send and 20s timeout (increased slightly)
+                // Race between send and 20s timeout
                 await Promise.race([
-                    engine.send(cleanNumber, type, personalizedContent, personalizedCaption),
+                    engine.send(finalNumber, type, personalizedContent, personalizedCaption),
                     new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout')), 20000))
                 ]);
                 successCount++;
                 stats.messagesToday++;
                 socket.emit('message-progress', {
                     current: index + 1,
-                    total: numbers.length,
+                    total: uniqueNumbers.length,
                     lastNumber: number,
                     status: 'success'
                 });
@@ -124,10 +146,10 @@ io.on('connection', (socket) => {
                 failCount++;
                 socket.emit('message-progress', {
                     current: index + 1,
-                    total: numbers.length,
+                    total: uniqueNumbers.length,
                     lastNumber: number,
                     status: 'failed',
-                    error: (error as any).message
+                    error: (error as any).message,
                 });
             }
         }
