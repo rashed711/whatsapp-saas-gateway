@@ -8,12 +8,15 @@
 // للتعامل مع المفاتيح المشفرة داخل MongoDB.
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import P from 'pino';
+import fs from 'fs/promises';
+import { getLinkPreview } from 'link-preview-js';
 
 
 
 export class WhatsAppEngine {
   private userId: string;
   private status: 'IDLE' | 'QR' | 'CONNECTED' | 'ERROR' = 'IDLE';
+  private sock: any = null;
 
   constructor(userId: string) {
     this.userId = userId;
@@ -51,11 +54,12 @@ export class WhatsAppEngine {
     const { state, saveCreds } = await useMultiFileAuthState(`./auth_${this.userId}`);
 
     // إنشاء socket للواتساب
-    const sock = makeWASocket({
+    this.sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
       logger: P({ level: 'silent' })
     });
+    const sock = this.sock;
 
     // إرسال QR كـ data URL للواجهة الأمامية
     // (تم الدمج مع connection.update)
@@ -92,9 +96,102 @@ export class WhatsAppEngine {
     sock.ev.on('creds.update', saveCreds);
   }
 
-  async send(to: string, message: string) {
-    if (this.status !== 'CONNECTED') throw new Error("الجهاز غير متصل!");
-    console.log(`[API] إرسال رسالة إلى ${to}...`);
-    return { success: true, timestamp: Date.now() };
+  async send(to: string, type: 'text' | 'image' | 'audio' | 'video' | 'document', content: string, caption?: string) {
+    if (this.status !== 'CONNECTED' || !this.sock) throw new Error("الجهاز غير متصل!");
+
+    const jid = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
+    console.log(`[API] إرسال ${type} إلى ${to}...`);
+
+    try {
+      if (type === 'text') {
+        // Detect URL for link preview
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        const matchedUrl = content.match(urlRegex)?.[0];
+
+        if (matchedUrl) {
+          try {
+            const previewData: any = await getLinkPreview(matchedUrl);
+
+            // Construct rich preview message
+            // Note: High quality thumbnail requires fetching and buffering the image
+            let thumbnail: Buffer | undefined = undefined;
+            if (previewData.images && previewData.images.length > 0) {
+              try {
+                const response = await fetch(previewData.images[0]);
+                const arrayBuffer = await response.arrayBuffer();
+                thumbnail = Buffer.from(arrayBuffer);
+              } catch (e) {
+                console.warn('Failed to fetch thumbnail', e);
+              }
+            }
+
+            await this.sock.sendMessage(jid, {
+              text: content,
+              contextInfo: {
+                externalAdReply: {
+                  title: previewData.title || 'Link Preview',
+                  body: previewData.description || matchedUrl,
+                  thumbnail: thumbnail,
+                  sourceUrl: matchedUrl,
+                  mediaType: 1, // 1 = Thumbnail from sourceUrl, 2 = Thumbnail from image file
+                  renderLargerThumbnail: true
+                }
+              }
+            });
+          } catch (err) {
+            console.error('Link preview failed, sending text only', err);
+            await this.sock.sendMessage(jid, { text: content });
+          }
+        } else {
+          await this.sock.sendMessage(jid, { text: content });
+        }
+      } else {
+        // Handle media (image, audio, video, document)
+        // Extract base64 part safely (handles any mimetype prefix)
+        const base64Part = content.includes(',') ? content.split(',')[1] : content;
+
+        if (!base64Part) {
+          throw new Error("Invalid media content: Base64 data missing");
+        }
+
+        const buffer = Buffer.from(base64Part, 'base64');
+        console.log(`[API] Created buffer for ${type}, size: ${buffer.length} bytes`);
+
+        if (type === 'image') {
+          await this.sock.sendMessage(jid, { image: buffer, caption: caption });
+        } else if (type === 'audio') {
+          await this.sock.sendMessage(jid, { audio: buffer, ptt: true });
+        } else if (type === 'video') {
+          await this.sock.sendMessage(jid, { video: buffer, caption: caption });
+        } else if (type === 'document') {
+          await this.sock.sendMessage(jid, { document: buffer, mimetype: 'application/pdf', fileName: caption || 'file.pdf' });
+        }
+      }
+      return { success: true, timestamp: Date.now() };
+    } catch (error) {
+      console.error(`[API] فشل الإرسال:`, error);
+      throw error;
+    }
+  }
+  async logout() {
+    try {
+      console.log('[Engine] Logging out...');
+      if (this.sock) {
+        await this.sock.logout(); // Try graceful logout
+        this.sock.end(undefined); // Close connection
+        this.sock = null;
+      }
+    } catch (err) {
+      console.error('[Engine] Error during logout:', err);
+    } finally {
+      // Force cleanup auth folder
+      try {
+        await fs.rm(`./auth_${this.userId}`, { recursive: true, force: true });
+        console.log('[Engine] Auth session cleared.');
+        this.status = 'IDLE';
+      } catch (err) {
+        console.error('[Engine] Failed to delete auth folder:', err);
+      }
+    }
   }
 }

@@ -5,6 +5,7 @@ import {
   Send, Zap, Clock, Smartphone, RefreshCcw, Copy, AlertTriangle
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import MessageSender from './src/components/MessageSender';
 
 const App = () => {
   const [status, setStatus] = useState<'disconnected' | 'connecting' | 'qr' | 'connected' | 'error'>('disconnected');
@@ -60,6 +61,15 @@ const App = () => {
     if (socketRef.current) {
       socketRef.current.emit('start-session');
       addLog('جاري طلب جلسة جديدة من السيرفر...');
+    }
+  };
+
+  const handleLogout = () => {
+    if (confirm('هل أنت متأكد أنك تريد تسجيل الخروج وحذف الجلسة؟')) {
+      if (socketRef.current) {
+        socketRef.current.emit('logout');
+        addLog('جاري تسجيل الخروج...');
+      }
     }
   };
 
@@ -140,6 +150,14 @@ const App = () => {
             <div className="bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm text-xs font-bold text-slate-600">
               API Version: 2.1.0
             </div>
+            {status === 'connected' && (
+              <button
+                onClick={handleLogout}
+                className="bg-red-50 text-red-500 hover:bg-red-100 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors border border-red-100"
+              >
+                <LogOut size={14} /> خروج
+              </button>
+            )}
           </header>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -167,6 +185,10 @@ const App = () => {
                 </div>
                 <Zap className="absolute -bottom-4 -right-4 w-24 h-24 text-white/5" />
               </div>
+
+              {/* Message Sender Component */}
+              <MessageSender socket={socketRef.current} status={status} />
+
 
               <div className="bg-slate-950 rounded-2xl p-5 border border-white/5 font-mono text-[10px] text-white/60 h-48 flex flex-col">
                 <div className="flex justify-between items-center mb-4 border-b border-white/10 pb-2">

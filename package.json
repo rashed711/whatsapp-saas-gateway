@@ -13,8 +13,10 @@
   "dependencies": {
     "@types/qrcode": "^1.5.6",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "emoji-picker-react": "^4.16.1",
     "express": "^5.2.1",
     "framer-motion": "10.16.4",
+    "link-preview-js": "^3.2.0",
     "lucide-react": "0.344.0",
     "pino": "^10.1.0",
     "pino-pretty": "^13.1.3",
