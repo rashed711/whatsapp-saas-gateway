@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Send, Image, FileText, Clock, AlertCircle, CheckCircle2, Bold, Italic, Strikethrough, Code, Smile, X, Hash } from 'lucide-react';
+import { Send, Image, FileText, Clock, AlertCircle, CheckCircle2, Bold, Italic, Strikethrough, Code, Smile, X, Hash, Filter, AlertTriangle } from 'lucide-react';
 import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
 
 interface MessageSenderProps {
@@ -18,6 +18,14 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
     const [maxDelay, setMaxDelay] = useState(10);
     const [sending, setSending] = useState(false);
     const [progress, setProgress] = useState<{ current: number; total: number; status: string } | null>(null);
+    const [report, setReport] = useState<{ success: number; failed: number; failedNumbers: { number: string, reason: string }[] }>({ success: 0, failed: 0, failedNumbers: [] });
+
+    const handleRemoveDuplicates = () => {
+        const list = numbers.split('\n').map(n => n.trim()).filter(n => n.length > 0);
+        const unique = [...new Set(list)];
+        setNumbers(unique.join('\n'));
+        alert(`تم إزالة التكرار. المتبقي: ${unique.length} من أصل ${list.length}`);
+    };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -99,6 +107,7 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
         }
 
         setSending(true);
+        setReport({ success: 0, failed: 0, failedNumbers: [] });
         setProgress({ current: 0, total: numbersList.length, status: 'starting' });
 
         socket.emit('send-message', {
@@ -121,6 +130,16 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
                 total: data.total,
                 status: data.status
             });
+
+            if (data.status === 'success') {
+                setReport(prev => ({ ...prev, success: prev.success + 1 }));
+            } else if (data.status === 'failed') {
+                setReport(prev => ({
+                    ...prev,
+                    failed: prev.failed + 1,
+                    failedNumbers: [...prev.failedNumbers, { number: data.lastNumber, reason: data.error }]
+                }));
+            }
         });
 
         socket.on('message-complete', () => {
@@ -131,7 +150,7 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
         return () => {
             socket.off('message-progress');
             socket.off('message-complete');
-        }
+        };
     }, [socket]);
 
     return (
@@ -143,7 +162,12 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
             <div className="space-y-4">
                 {/* Numbers Input */}
                 <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">الأرقام (رقم في كل سطر)</label>
+                    <div className="flex justify-between items-center mb-1">
+                        <label className="block text-xs font-bold text-slate-500">الأرقام (رقم في كل سطر)</label>
+                        <button onClick={handleRemoveDuplicates} className="text-xs text-blue-500 hover:text-blue-600 font-bold flex items-center gap-1">
+                            <Filter size={12} /> حذف المكرر
+                        </button>
+                    </div>
                     <textarea
                         className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono h-32 focus:outline-none focus:border-emerald-500 transition-colors"
                         placeholder="9665xxxxxxxx&#10;9665xxxxxxxx"
@@ -291,6 +315,37 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
                                 style={{ width: `${(progress.current / progress.total) * 100}%` }}
                             ></div>
                         </div>
+                    </div>
+                )}
+
+                {/* Report Summary */}
+                {(report.success > 0 || report.failed > 0) && (
+                    <div className="mt-4 bg-slate-50 rounded-xl p-4 border border-slate-200">
+                        <h4 className="font-bold text-sm text-slate-700 mb-3 flex items-center gap-2">
+                            <AlertTriangle size={16} /> تقرير الإرسال
+                        </h4>
+                        <div className="flex gap-4 text-xs font-bold">
+                            <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100">
+                                <CheckCircle2 size={14} /> ناجح: {report.success}
+                            </div>
+                            <div className="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">
+                                <X size={14} /> فشل: {report.failed}
+                            </div>
+                        </div>
+
+                        {report.failedNumbers.length > 0 && (
+                            <div className="mt-3">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">الأرقام التي فشل الإرسال لها:</p>
+                                <div className="max-h-32 overflow-y-auto bg-white border border-slate-200 rounded-lg p-2 space-y-1">
+                                    {report.failedNumbers.map((item, idx) => (
+                                        <div key={idx} className="flex justify-between text-xs text-red-500">
+                                            <span className="font-mono">{item.number}</span>
+                                            <span className="opacity-75">{item.reason || 'خطأ غير معروف'}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 

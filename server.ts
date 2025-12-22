@@ -16,6 +16,26 @@ const io = new Server(httpServer, {
 // متغير لتخزين محرك الواتساب (يمكن تطويره ليدعم جلسات متعددة)
 const engine = new WhatsAppEngine('master-session');
 
+// Stats (Mock/Simple In-Memory)
+let stats = {
+    messagesToday: 0,
+    startTime: Date.now()
+};
+
+app.get('/stats', (req, res) => {
+    const uptimeSeconds = Math.floor((Date.now() - stats.startTime) / 1000);
+    const uptimeStr = uptimeSeconds > 3600
+        ? `${Math.floor(uptimeSeconds / 3600)}h ${Math.floor((uptimeSeconds % 3600) / 60)}m`
+        : `${Math.floor(uptimeSeconds / 60)}m ${uptimeSeconds % 60}s`;
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.json({
+        messagesToday: stats.messagesToday,
+        activeDevices: engine.currentStatus === 'CONNECTED' ? 1 : 0,
+        uptime: uptimeStr
+    });
+});
+
 io.on('connection', (socket) => {
     console.log('Frontend connected:', socket.id);
 
@@ -75,6 +95,12 @@ io.on('connection', (socket) => {
                 const cleanNumber = number.replace(/\D/g, ''); // Extract only digits
                 console.log(`Sending to cleaned number: ${cleanNumber}`);
 
+                // Validate Number
+                const isValid = await engine.validateNumber(cleanNumber);
+                if (!isValid) {
+                    throw new Error("Number not active on WhatsApp");
+                }
+
                 // Personalize content
                 const personalizedContent = type === 'text' ? replaceVariables(content) : content;
                 const personalizedCaption = replaceVariables(caption);
@@ -85,6 +111,7 @@ io.on('connection', (socket) => {
                     new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout')), 20000))
                 ]);
                 successCount++;
+                stats.messagesToday++;
                 socket.emit('message-progress', {
                     current: index + 1,
                     total: numbers.length,

@@ -194,4 +194,19 @@ export class WhatsAppEngine {
       }
     }
   }
+  async validateNumber(phone: string): Promise<boolean> {
+    if (this.status !== 'CONNECTED' || !this.sock) return false;
+    const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
+    try {
+      const result = await this.sock.onWhatsApp(jid);
+      return result && result.length > 0 && result[0].exists;
+    } catch (err) {
+      console.error(`Failed to validate number ${phone}`, err);
+      return false;
+    }
+  }
+
+  public get currentStatus() {
+    return this.status;
+  }
 }
