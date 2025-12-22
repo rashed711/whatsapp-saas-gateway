@@ -6,6 +6,10 @@
 
 // ملاحظة: في بيئة التشغيل الفعلية (Node.js)، سنستخدم BufferJSON.stringify/parse 
 // للتعامل مع المفاتيح المشفرة داخل MongoDB.
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import P from 'pino';
+import QRCode from 'qrcode';
+
 
 export class WhatsAppEngine {
   private userId: string;
@@ -41,19 +45,49 @@ export class WhatsAppEngine {
    */
   async startSession(onQR: (qr: string) => void, onConnected: () => void) {
     this.status = 'QR';
-    console.log("[Engine] جاري تشغيل Baileys Socket...");
-    
-    // محاكاة عملية الربط
-    setTimeout(() => {
-      const mockQR = "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=W-SAAS-GATEWAY-" + Date.now();
-      onQR(mockQR);
-    }, 2000);
+    console.log('[Engine] Starting Baileys socket...');
 
-    // محاكاة نجاح الاتصال (عند مسح الكود)
-    setTimeout(() => {
-      this.status = 'CONNECTED';
-      onConnected();
-    }, 12000);
+    // إنشاء حالة المصادقة (تُحفظ في مجلد auth_<userId>)
+    const { state, saveCreds } = await useMultiFileAuthState(`./auth_${this.userId}`);
+
+    // إنشاء socket للواتساب
+    const sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: false,
+      logger: P({ level: 'silent' })
+    });
+
+    // إرسال QR كـ data URL للواجهة الأمامية
+    // (تم الدمج مع connection.update)
+
+    // مراقبة تحديثات الاتصال
+    // مراقبة تحديثات الاتصال واستلام الـ QR
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        // Baileys يرسل الـ QR هنا
+        const qrDataUrl = `data:image/png;base64,${qr}`;
+        onQR(qrDataUrl);
+      }
+      if (connection === 'open') {
+        this.status = 'CONNECTED';
+        onConnected();
+        await saveCreds();
+      } else if (connection === 'close') {
+        const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
+        if (shouldReconnect) {
+          console.log('[Engine] Reconnecting...');
+          this.startSession(onQR, onConnected);
+        } else {
+          console.log('[Engine] Connection closed, logged out.');
+          this.status = 'ERROR';
+        }
+      }
+    });
+
+    // حفظ بيانات الاعتماد عند تحديثها
+    sock.ev.on('creds.update', saveCreds);
   }
 
   async send(to: string, message: string) {

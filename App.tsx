@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  LayoutDashboard, Key, QrCode, LogOut, CheckCircle2, 
+import { io } from 'socket.io-client';
+import {
+  LayoutDashboard, Key, QrCode, LogOut, CheckCircle2,
   Send, Zap, Clock, Smartphone, RefreshCcw, Copy, AlertTriangle
 } from 'lucide-react';
 
@@ -10,37 +11,52 @@ const App = () => {
   const [logs, setLogs] = useState<string[]>([]);
   const [apiKey, setApiKey] = useState('sk_live_wsaas_987a6s5d4f3g2h1j');
   const [copied, setCopied] = useState(false);
-  
+
   const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
     const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
     const prefix = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
     setLogs(prev => [`[${timestamp}] ${prefix} ${message}`, ...prev].slice(0, 100));
   };
-  
+
+  // Initialize Socket.io reference
+  const socketRef = useRef<any>(null);
+
   useEffect(() => {
-    addLog('تم تهيئة النظام بنجاح.');
-    addLog('متصل بقاعدة البيانات السحابية.', 'success');
+    // Connect to backend
+    socketRef.current = io('http://localhost:3001');
+
+    socketRef.current.on('connect', () => {
+      addLog('تم الاتصال بالسيرفر الخلفي.', 'success');
+    });
+
+    socketRef.current.on('connect_error', (err: any) => {
+      console.error('Socket connection error:', err);
+      // addLog(`فشل الاتصال بالسيرفر: ${err.message}`, 'error'); 
+    });
+
+    socketRef.current.on('status', (newStatus: any) => {
+      setStatus(newStatus);
+      if (newStatus === 'connected') {
+        addLog('تم ربط الجهاز وتخزين الجلسة سحابياً.', 'success');
+      } else if (newStatus === 'error') {
+        addLog('فشل في بدء الجلسة. يرجى المحاولة مرة أخرى.', 'error');
+      }
+    });
+
+    socketRef.current.on('qr', (dataUrl: string) => {
+      setQrCode(dataUrl);
+      addLog('تم استلام رمز QR جديد.', 'info');
+    });
+
+    return () => {
+      socketRef.current.disconnect();
+    };
   }, []);
 
-  const handleStartConnection = async () => {
-    setStatus('connecting');
-    addLog('جاري طلب جلسة جديدة من السيرفر...');
-    try {
-      // محاكاة استدعاء API
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      const newQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=WSAAS_SESSION_${Date.now()}`;
-      setQrCode(newQrCode);
-      setStatus('qr');
-      addLog('تم استلام رمز QR. يرجى مسحه خلال 45 ثانية.', 'success');
-      // محاكاة نجاح الربط بعد المسح
-      setTimeout(() => {
-        if(status !== 'qr') return; // To avoid state change if user disconnects
-        setStatus('connected');
-        addLog('تم ربط الجهاز وتخزين الجلسة سحابياً.', 'success');
-      }, 10000); // User scans within 10 seconds
-    } catch (err) {
-      setStatus('error');
-      addLog('فشل في بدء الجلسة. يرجى المحاولة مرة أخرى.', 'error');
+  const handleStartConnection = () => {
+    if (socketRef.current) {
+      socketRef.current.emit('start-session');
+      addLog('جاري طلب جلسة جديدة من السيرفر...');
     }
   };
 
@@ -78,7 +94,7 @@ const App = () => {
           </div>
         );
       case 'error':
-         return (
+        return (
           <div className="text-center text-rose-600">
             <AlertTriangle size={48} className="mx-auto mb-2" />
             <p className="font-bold">حدث خطأ</p>
@@ -96,9 +112,9 @@ const App = () => {
           <span className="font-bold text-lg tracking-tight">W-SaaS Gateway</span>
         </div>
         <nav className="space-y-2 flex-1">
-          <button className="flex items-center gap-3 w-full p-3 rounded-xl bg-emerald-500 text-white font-bold"><LayoutDashboard size={18}/>لوحة التحكم</button>
-          <button className="flex items-center gap-3 w-full p-3 rounded-xl text-slate-400 hover:bg-white/5"><Smartphone size={18}/>الأجهزة</button>
-          <button className="flex items-center gap-3 w-full p-3 rounded-xl text-slate-400 hover:bg-white/5"><Key size={18}/>API Keys</button>
+          <button className="flex items-center gap-3 w-full p-3 rounded-xl bg-emerald-500 text-white font-bold"><LayoutDashboard size={18} />لوحة التحكم</button>
+          <button className="flex items-center gap-3 w-full p-3 rounded-xl text-slate-400 hover:bg-white/5"><Smartphone size={18} />الأجهزة</button>
+          <button className="flex items-center gap-3 w-full p-3 rounded-xl text-slate-400 hover:bg-white/5"><Key size={18} />API Keys</button>
         </nav>
         <div className="mt-auto border-t border-slate-800 pt-4">
           <button onClick={handleDisconnect} className="flex items-center gap-3 text-slate-400 hover:text-white transition-colors w-full">
@@ -127,7 +143,7 @@ const App = () => {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm h-fit">
-              <h3 className="font-bold mb-6 flex items-center gap-2"><QrCode size={18} className="text-emerald-500"/> ربط جهاز واتساب</h3>
+              <h3 className="font-bold mb-6 flex items-center gap-2"><QrCode size={18} className="text-emerald-500" /> ربط جهاز واتساب</h3>
               <div className="aspect-square bg-slate-100 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center relative">
                 {renderConnectionStatus()}
               </div>
