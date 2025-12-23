@@ -74,6 +74,97 @@ app.get('/', (req, res) => {
     res.send('WhatsApp Backend Server is running and reachable!');
 });
 
+// Middleware for API
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Global CORS Middleware for API routes
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
+
+// --- API Endpoints for Individual Numbers ---
+
+// Get Session Status
+app.get('/api/sessions/:sessionId/status', (req, res) => {
+    const { sessionId } = req.params;
+    const session = sessions.get(sessionId);
+
+    if (!session) {
+        return res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+    }
+
+    res.json({
+        sessionId: session.id,
+        name: session.name,
+        status: session.engine.currentStatus
+    });
+});
+
+// Send Message (Text, Image, etc) via HTTP
+app.post('/api/sessions/:sessionId/send', async (req, res) => {
+    const { sessionId } = req.params;
+    // Expected body: { number: "...", type: "text|image...", content: "...", caption: "..." }
+    const { number, type, content, caption } = req.body;
+
+    const session = sessions.get(sessionId);
+
+    if (!session) {
+        return res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+    }
+
+    if (session.engine.currentStatus !== 'CONNECTED') {
+        return res.status(400).json({ error: 'Session is not connected', code: 'SESSION_NOT_CONNECTED' });
+    }
+
+    if (!number || !content || !type) {
+        return res.status(400).json({ error: 'Missing required fields: number, type, content', code: 'MISSING_FIELDS' });
+    }
+
+    const cleanNumber = number.replace(/\D/g, '');
+    // Basic Egypt normalization if needed, or just trust input
+    const finalNumber = (cleanNumber.startsWith('01') && cleanNumber.length === 11)
+        ? '20' + cleanNumber.substring(1)
+        : cleanNumber;
+
+    if (finalNumber.length < 10) {
+        return res.status(400).json({ error: 'Invalid phone number', code: 'INVALID_NUMBER' });
+    }
+
+    try {
+        // Validate presence on WhatsApp
+        // We can make this optional via query param ?skip_validate=true for speed
+        const shouldValidate = req.query.skip_validate !== 'true';
+
+        if (shouldValidate) {
+            const isValid = await session.engine.validateNumber(finalNumber);
+            if (!isValid) {
+                return res.status(400).json({ error: 'Number not registered on WhatsApp', code: 'NUMBER_NOT_REGISTERED' });
+            }
+        }
+
+        const validTypes = ['text', 'image', 'audio', 'video', 'document'];
+        if (!validTypes.includes(type)) {
+            return res.status(400).json({ error: `Invalid type. Supported: ${validTypes.join(', ')}` });
+        }
+
+        // Send
+        await session.engine.send(finalNumber, type as any, content, caption);
+
+        return res.json({ success: true, message: 'Message sent successfully', timestamp: Date.now() });
+
+    } catch (error) {
+        console.error(`API Send Error [${sessionId}]:`, error);
+        return res.status(500).json({ error: (error as any).message || 'Internal Server Error' });
+    }
+});
+
 io.on('connection', (socket) => {
     console.log('Frontend connected:', socket.id);
 

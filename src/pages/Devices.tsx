@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Smartphone, RefreshCw, QrCode, LogOut, CheckCircle2, Plus, Trash2, X, AlertCircle } from 'lucide-react';
+import { Smartphone, RefreshCw, QrCode, LogOut, CheckCircle2, Plus, Trash2, X, AlertCircle, Code, Copy, Check } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 
 interface Session {
@@ -18,6 +18,15 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
     const [showAddModal, setShowAddModal] = useState(false);
     const [newSessionName, setNewSessionName] = useState('');
     const [loading, setLoading] = useState(false);
+    const [showApiModal, setShowApiModal] = useState(false);
+    const [selectedSessionApi, setSelectedSessionApi] = useState<Session | null>(null);
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = (text: string) => {
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
 
     useEffect(() => {
         if (!socket) return;
@@ -194,10 +203,93 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                     >
                                         <Trash2 size={12} /> حذف من القائمة
                                     </button>
+
+                                    <button
+                                        onClick={() => {
+                                            setSelectedSessionApi(session);
+                                            setShowApiModal(true);
+                                        }}
+                                        className="w-full py-2 text-slate-400 hover:text-slate-600 text-xs font-bold transition-colors flex items-center justify-center gap-1 border-t border-slate-50 mt-2"
+                                    >
+                                        <Code size={12} /> الربط البرمجي (API)
+                                    </button>
                                 </div>
                             </div>
                         </div>
                     ))}
+                </div>
+            )}
+
+            {/* API Modal */}
+            {showApiModal && selectedSessionApi && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 text-left" dir="ltr">
+                    <div className="bg-white rounded-2xl w-full max-w-2xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200 h-[80vh] flex flex-col">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-xl font-bold text-slate-800">API Integration</h3>
+                            <button onClick={() => setShowApiModal(false)} className="text-slate-400 hover:text-slate-600">
+                                <X size={24} />
+                            </button>
+                        </div>
+
+                        <div className="overflow-y-auto flex-1 custom-scrollbar pr-4 space-y-6">
+
+                            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Endpoint URL</label>
+                                <div className="flex items-center gap-2">
+                                    <code className="flex-1 bg-white p-3 rounded-lg border border-slate-200 font-mono text-sm text-slate-700 break-all">
+                                        {window.location.protocol}//{window.location.hostname}:3050/api/sessions/{selectedSessionApi.id}/send
+                                    </code>
+                                    <button
+                                        onClick={() => handleCopy(`${window.location.protocol}//${window.location.hostname}:3050/api/sessions/${selectedSessionApi.id}/send`)}
+                                        className="p-3 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-emerald-500 hover:border-emerald-500 transition-colors"
+                                    >
+                                        {copied ? <Check size={18} /> : <Copy size={18} />}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                <h4 className="font-bold text-slate-700">Payload Examples (JSON)</h4>
+
+                                <div>
+                                    <span className="text-xs font-bold bg-blue-100 text-blue-700 px-2 py-1 rounded">Text Message</span>
+                                    <pre className="mt-2 bg-slate-900 text-slate-50 p-4 rounded-xl text-xs font-mono overflow-x-auto">
+                                        {`{
+  "number": "201012345678",
+  "type": "text",
+  "content": "Hello via API! Is this working?"
+}`}
+                                    </pre>
+                                </div>
+
+                                <div>
+                                    <span className="text-xs font-bold bg-purple-100 text-purple-700 px-2 py-1 rounded">Image Message</span>
+                                    <pre className="mt-2 bg-slate-900 text-slate-50 p-4 rounded-xl text-xs font-mono overflow-x-auto">
+                                        {`{
+  "number": "201012345678", 
+  "type": "image",
+  "caption": "Check this out!",
+  "content": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" 
+}`}
+                                    </pre>
+                                    <p className="text-xs text-slate-400 mt-1">* Content must be a Base64 string (Data URL or raw base64).</p>
+                                </div>
+
+                                <div>
+                                    <span className="text-xs font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded">Document (PDF)</span>
+                                    <pre className="mt-2 bg-slate-900 text-slate-50 p-4 rounded-xl text-xs font-mono overflow-x-auto">
+                                        {`{
+  "number": "201012345678",
+  "type": "document",
+  "caption": "invoice.pdf",
+  "content": "BASE64_STRING_HERE..."
+}`}
+                                    </pre>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
                 </div>
             )}
 
