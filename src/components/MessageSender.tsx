@@ -110,10 +110,35 @@ const MessageSender: React.FC<MessageSenderProps> = ({ socket, status }) => {
     }, [socket]); // Only re-run if socket object changes
 
     const handleRemoveDuplicates = () => {
-        const list = numbers.split('\n').map(n => n.trim()).filter(n => n.length > 0);
-        const unique = [...new Set(list)];
-        setNumbers(unique.join('\n'));
-        alert(`تم إزالة التكرار. المتبقي: ${unique.length} من أصل ${list.length}`);
+        let list = numbers.split('\n').map(n => n.trim()).filter(n => n.length > 0);
+        // 1. Remove exact duplicates
+        list = [...new Set(list)];
+
+        // 2. Remove subset/local versions
+        const filtered = list.filter((numA, index, self) => {
+            // We want to remove numA if there is ANY numB that "covers" it.
+            const isRedundant = self.some(numB => {
+                if (numA === numB) return false; // Don't compare self
+
+                // Case 1: numA is a suffix of numB (e.g. 50... vs 96650...)
+                if (numB.length > numA.length && numB.endsWith(numA)) return true;
+
+                // Case 2: numA starts with 0, and (numA without 0) is suffix of numB
+                // e.g. 050... vs 96650...
+                if (numA.startsWith('0')) {
+                    const withoutZero = numA.substring(1);
+                    if (withoutZero.length > 0 && numB.length > withoutZero.length && numB.endsWith(withoutZero)) return true;
+                }
+
+                return false;
+            });
+
+            return !isRedundant;
+        });
+
+        const countRemoved = list.length - filtered.length;
+        setNumbers(filtered.join('\n'));
+        alert(`تم إزالة التكرار والأرقام الناقصة.\nالمتبقي: ${filtered.length} (تم حذف ${countRemoved} رقم)`);
     };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {

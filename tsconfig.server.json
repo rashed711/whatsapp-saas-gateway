@@ -11,7 +11,8 @@
         "skipLibCheck": true,
         "types": [
             "node"
-        ]
+        ],
+        "outDir": "./dist-server"
     },
     "include": [
         "server.ts",

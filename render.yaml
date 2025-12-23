@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: whatsapp-gateway-backend
+    env: node
+    buildCommand: npm install && npm run build:server
+    startCommand: npm run start:prod
+    envVars:
+      - key: NODE_VERSION
+        value: 20.0.0

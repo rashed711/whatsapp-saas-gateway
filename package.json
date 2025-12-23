@@ -8,7 +8,9 @@
     "server": "ts-node --esm --project tsconfig.server.json server.ts",
     "start": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start:prod": "node dist-server/server.js"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",
