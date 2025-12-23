@@ -11,7 +11,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout }) => {
         { to: '/', icon: <LayoutDashboard size={20} />, label: 'لوحة التحكم' },
         { to: '/devices', icon: <Smartphone size={20} />, label: 'الأجهزة المتصلة' },
         { to: '/campaigns', icon: <Send size={20} />, label: 'إرسال الحملات' },
-        { to: '/api', icon: <Key size={20} />, label: 'API & Tokens' },
+
     ];
 
     return (

@@ -6,7 +6,7 @@ import Login from './src/pages/Login';
 import Dashboard from './src/pages/Dashboard';
 import Devices from './src/pages/Devices';
 import Campaigns from './src/pages/Campaigns';
-import ApiDocs from './src/pages/ApiDocs';
+
 
 const App = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -75,7 +75,7 @@ const App = () => {
           <Route path="/" element={<Dashboard socket={socket} />} />
           <Route path="/devices" element={<Devices socket={socket} />} />
           <Route path="/campaigns" element={<Campaigns socket={socket} />} />
-          <Route path="/api-docs" element={<ApiDocs />} />
+
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />
