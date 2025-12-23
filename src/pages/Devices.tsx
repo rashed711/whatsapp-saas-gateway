@@ -109,7 +109,13 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
     };
 
     const handleLogout = (sessionId: string) => {
-        if (confirm('هل تريد تسجيل الخروج من هذا الجهاز؟')) {
+        const session = sessions.find(s => s.id === sessionId);
+        const isConnected = session?.status === 'CONNECTED';
+        const message = isConnected
+            ? 'هل تريد تسجيل الخروج من هذا الجهاز؟'
+            : 'هل تريد إلغاء المحاولة وإعادة تعيين الجلسة؟';
+
+        if (confirm(message)) {
             socket.emit('logout', { sessionId });
         }
     };
@@ -195,7 +201,15 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                         >
                                             تسجيل خروج
                                         </button>
-                                    ) : null}
+                                    ) : (
+                                        // Case: connecting or QR - allow reset
+                                        <button
+                                            onClick={() => handleLogout(session.id)}
+                                            className="w-full py-2 bg-slate-100 text-slate-600 rounded-lg text-sm font-bold hover:bg-slate-200 transition-colors flex items-center justify-center gap-2"
+                                        >
+                                            <RefreshCw size={16} /> إعادة تعيين الجلسة
+                                        </button>
+                                    )}
 
                                     <button
                                         onClick={() => handleDeleteSession(session.id)}
