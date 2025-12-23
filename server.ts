@@ -1,7 +1,7 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { WhatsAppEngine } from './services/whatsappEngine.ts';
+import { WhatsAppEngine } from './services/whatsappEngine.js';
 
 const app = express();
 const httpServer = createServer(app);
