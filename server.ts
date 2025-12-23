@@ -70,6 +70,10 @@ app.get('/stats', (req, res) => {
     });
 });
 
+app.get('/', (req, res) => {
+    res.send('WhatsApp Backend Server is running and reachable!');
+});
+
 io.on('connection', (socket) => {
     console.log('Frontend connected:', socket.id);
 
