@@ -251,10 +251,10 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Endpoint URL</label>
                                 <div className="flex items-center gap-2">
                                     <code className="flex-1 bg-white p-3 rounded-lg border border-slate-200 font-mono text-sm text-slate-700 break-all">
-                                        {(import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:3050`) + `/api/sessions/${selectedSessionApi.id}/send`}
+                                        {(import.meta.env.VITE_API_URL?.replace(/\/$/, '') || `${window.location.protocol}//${window.location.hostname}:3050`) + `/api/sessions/${selectedSessionApi.id}/send`}
                                     </code>
                                     <button
-                                        onClick={() => handleCopy((import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:3050`) + `/api/sessions/${selectedSessionApi.id}/send`)}
+                                        onClick={() => handleCopy((import.meta.env.VITE_API_URL?.replace(/\/$/, '') || `${window.location.protocol}//${window.location.hostname}:3050`) + `/api/sessions/${selectedSessionApi.id}/send`)}
                                         className="p-3 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-emerald-500 hover:border-emerald-500 transition-colors"
                                     >
                                         {copied ? <Check size={18} /> : <Copy size={18} />}
