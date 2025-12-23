@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Smartphone, RefreshCw, QrCode, LogOut, CheckCircle2, Plus, Trash2, X } from 'lucide-react';
+import { Smartphone, RefreshCw, QrCode, LogOut, CheckCircle2, Plus, Trash2, X, AlertCircle } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 
 interface Session {
@@ -73,14 +73,20 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
         if (!newSessionName.trim() || !socket) return;
         setLoading(true);
         socket.emit('create-session', { name: newSessionName }, (response: any) => {
+            setLoading(false);
+
+            if (response && response.error) {
+                alert('فشل إضافة الجهاز: ' + response.error);
+                return;
+            }
+
             if (response && response.sessionId) {
+                setNewSessionName('');
+                setShowAddModal(false);
                 // Auto-start the session
                 handleStartSession(response.sessionId);
             }
         });
-        setNewSessionName('');
-        setShowAddModal(false);
-        setLoading(false);
     };
 
     const handleDeleteSession = (sessionId: string) => {

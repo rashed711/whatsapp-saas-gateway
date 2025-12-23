@@ -85,18 +85,31 @@ io.on('connection', (socket) => {
 
     // Create Session
     socket.on('create-session', async ({ name }, callback) => {
-        const sessionId = 'sess_' + Date.now();
-        const engine = new WhatsAppEngine('master-user', sessionId);
-        sessions.set(sessionId, { id: sessionId, name, engine });
-        await saveSessions();
+        try {
+            const sessionId = 'sess_' + Date.now();
+            const engine = new WhatsAppEngine('master-user', sessionId);
+            sessions.set(sessionId, { id: sessionId, name, engine });
 
-        socket.emit('session-created', { id: sessionId, name, status: 'IDLE' });
-        // Trigger list update for all clients
-        io.emit('sessions-updated');
+            try {
+                await saveSessions();
+            } catch (saveError) {
+                console.error('Failed to save sessions to disk:', saveError);
+                // We communicate this error but still allow the session to exist in memory
+            }
 
-        // Callback if provided
-        if (typeof callback === 'function') {
-            callback({ sessionId });
+            socket.emit('session-created', { id: sessionId, name, status: 'IDLE' });
+            // Trigger list update for all clients
+            io.emit('sessions-updated');
+
+            // Callback if provided
+            if (typeof callback === 'function') {
+                callback({ sessionId });
+            }
+        } catch (error) {
+            console.error('Error creating session:', error);
+            if (typeof callback === 'function') {
+                callback({ error: (error as any).message });
+            }
         }
     });
 
