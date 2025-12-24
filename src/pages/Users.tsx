@@ -16,8 +16,9 @@ const Users = () => {
 
     const fetchUsers = async () => {
         try {
+            const API_URL = import.meta.env.VITE_API_URL || '';
             const token = localStorage.getItem('token');
-            const res = await fetch('/api/users', {
+            const res = await fetch(`${API_URL}/api/users`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (res.ok) {
@@ -36,8 +37,9 @@ const Users = () => {
         setLoading(true);
 
         try {
+            const API_URL = import.meta.env.VITE_API_URL || '';
             const token = localStorage.getItem('token');
-            const response = await fetch('/api/auth/register', {
+            const response = await fetch(`${API_URL}/api/auth/register`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
