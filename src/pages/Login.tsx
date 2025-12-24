@@ -1,74 +1,114 @@
 import React, { useState } from 'react';
-import { Lock } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
+import { LogIn, Mail, Lock, AlertCircle } from 'lucide-react';
 
 interface LoginProps {
     onLogin: () => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
-    const [username, setUsername] = useState('');
+    const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
 
-    const handleLogin = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (username === 'admin' && password === '123456') {
-            onLogin();
+        setError('');
+        setLoading(true);
+
+        try {
+            const response = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ email, password }),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Authentication failed');
+            }
+
+            // Save token and user info
+            localStorage.setItem('token', data.token);
+            localStorage.setItem('user', JSON.stringify(data.user));
+
+            onLogin(); // Update parent state
             navigate('/');
-        } else {
-            setError('بيانات الدخول غير صحيحة');
+        } catch (err: any) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
         }
     };
 
     return (
-        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4" dir="rtl">
-            <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-200">
-                <div className="flex justify-center mb-6">
-                    <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
-                        <Lock size={32} />
-                    </div>
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 dir-rtl" dir="rtl">
+            <div className="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-700">
+                <div className="text-center mb-8">
+                    <h1 className="text-3xl font-bold text-white mb-2 flex items-center justify-center gap-2">
+                        <span className="text-emerald-500">WA</span> Gateway
+                    </h1>
+                    <p className="text-slate-400">تسجيل الدخول إلى لوحة التحكم</p>
                 </div>
-                <h2 className="text-2xl font-bold text-center text-slate-800 mb-2">تسجيل الدخول</h2>
-                <p className="text-center text-slate-500 mb-8">لوحة تحكم واتساب جيتواي</p>
 
-                <form onSubmit={handleLogin} className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-bold text-slate-600 mb-1">اسم المستخدم</label>
-                        <input
-                            type="text"
-                            className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 focus:outline-none"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            placeholder="admin"
-                        />
+                {error && (
+                    <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl mb-6 flex items-center gap-3">
+                        <AlertCircle size={20} />
+                        <span className="text-sm font-medium">{error}</span>
                     </div>
+                )}
+
+                <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
-                        <label className="block text-sm font-bold text-slate-600 mb-1">كلمة المرور</label>
-                        <input
-                            type="password"
-                            className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 focus:outline-none"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="••••••"
-                        />
+                        <label className="block text-sm font-medium text-slate-400 mb-1">البريد الإلكتروني</label>
+                        <div className="relative">
+                            <Mail className="absolute right-3 top-3 text-slate-500" size={20} />
+                            <input
+                                type="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-700 text-white pr-10 pl-4 py-3 rounded-xl focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
+                                placeholder="name@company.com"
+                                required
+                            />
+                        </div>
                     </div>
 
-                    {error && <p className="text-red-500 text-sm font-bold text-center">{error}</p>}
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-1">كلمة المرور</label>
+                        <div className="relative">
+                            <Lock className="absolute right-3 top-3 text-slate-500" size={20} />
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-700 text-white pr-10 pl-4 py-3 rounded-xl focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
+                                placeholder="••••••••"
+                                required
+                            />
+                        </div>
+                    </div>
 
                     <button
                         type="submit"
-                        className="w-full bg-emerald-500 text-white font-bold py-3 rounded-xl hover:bg-emerald-600 transition-colors shadow-lg hover:shadow-emerald-500/20"
+                        disabled={loading}
+                        className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        دخول
+                        {loading ? (
+                            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                            <>
+                                <LogIn size={20} />
+                                <span>دخول</span>
+                            </>
+                        )}
                     </button>
                 </form>
-
-                <div className="mt-6 text-center bg-slate-50 p-3 rounded-lg border border-slate-100">
-                    <p className="text-xs text-slate-400">بيانات افتراضية للتجربة:</p>
-                    <p className="text-xs font-mono text-slate-600 mt-1">user: admin | pass: 123456</p>
-                </div>
             </div>
         </div>
     );

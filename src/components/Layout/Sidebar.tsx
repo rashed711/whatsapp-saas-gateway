@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Smartphone, Send, Key, LogOut, X } from 'lucide-react';
+import { LayoutDashboard, Smartphone, Send, Key, LogOut, X, Users } from 'lucide-react';
 
 interface SidebarProps {
     onLogout: () => void;
@@ -9,11 +9,18 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose }) => {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    const isAdmin = user.role === 'admin';
+
     const links = [
         { to: '/', icon: <LayoutDashboard size={20} />, label: 'لوحة التحكم' },
         { to: '/devices', icon: <Smartphone size={20} />, label: 'الأجهزة المتصلة' },
         { to: '/campaigns', icon: <Send size={20} />, label: 'إرسال الحملات' },
     ];
+
+    if (isAdmin) {
+        links.push({ to: '/users', icon: <Users size={20} />, label: 'المستخدمين' });
+    }
 
     return (
         <>
@@ -44,6 +51,19 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose }) => {
                     >
                         <X size={24} />
                     </button>
+                </div>
+
+                <div className="p-4 border-b border-slate-800 bg-slate-800/50">
+                    <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg
+                            ${isAdmin ? 'bg-purple-500 text-white' : 'bg-emerald-500 text-white'}`}>
+                            {user.name ? user.name.charAt(0).toUpperCase() : 'U'}
+                        </div>
+                        <div className="overflow-hidden">
+                            <p className="text-white font-medium truncate">{user.name}</p>
+                            <p className="text-xs text-slate-400 truncate">{user.email}</p>
+                        </div>
+                    </div>
                 </div>
 
                 <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
