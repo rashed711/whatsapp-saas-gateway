@@ -514,12 +514,11 @@ io.on('connection', (socket) => {
 });
 
 
-// Serve Static Frontend (Production)
-app.use(express.static(path.join(__dirname, 'dist')));
-
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
+// Serve Static Frontend (Production) - DISABLED (Vercel hosts frontend)
+// app.use(express.static(path.join(__dirname, 'dist')));
+// app.get('*', (req, res) => {
+//    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// });
 
 const PORT = 3050;
 httpServer.listen(PORT, () => {
