@@ -17,6 +17,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.use(express.json()); // Middleware to parse JSON
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     maxHttpBufferSize: 1e7, // 10 MB

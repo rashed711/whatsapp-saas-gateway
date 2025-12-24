@@ -27,7 +27,17 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 body: JSON.stringify({ email, password }),
             });
 
-            const data = await response.json();
+            const text = await response.text();
+            console.log('Login Response:', response.status, text);
+
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                console.error('JSON Parse Error:', e);
+                // Return clear error if server is not returning JSON (e.g. 404/500 HTML page)
+                throw new Error(`Server Error (${response.status}): ${text.substring(0, 100)}`);
+            }
 
             if (!response.ok) {
                 throw new Error(data.error || 'Authentication failed');
