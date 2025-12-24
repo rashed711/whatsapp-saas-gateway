@@ -7,6 +7,8 @@ import Dashboard from './src/pages/Dashboard';
 import Devices from './src/pages/Devices';
 import Campaigns from './src/pages/Campaigns';
 
+import { Menu } from 'lucide-react';
+
 
 const App = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -53,11 +55,30 @@ const App = () => {
   const DashboardLayout = () => {
     if (!isAuthenticated) return <Navigate to="/login" replace />;
 
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
     return (
       <div className="flex bg-slate-50 min-h-screen font-sans dir-rtl" dir="rtl">
-        <Sidebar onLogout={handleAppLogout} />
-        <main className="flex-1 mr-64 p-8 overflow-y-auto">
-          <Outlet />
+        <Sidebar
+          onLogout={handleAppLogout}
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+        />
+
+        <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? '' : ''} md:mr-64`}>
+          {/* Mobile Header */}
+          <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-30 shadow-md">
+            <h1 className="text-xl font-bold flex items-center gap-2">
+              <span className="text-emerald-500">WA</span> Gateway
+            </h1>
+            <button onClick={() => setIsSidebarOpen(true)}>
+              <Menu size={24} />
+            </button>
+          </div>
+
+          <div className="p-4 md:p-8 overflow-y-auto">
+            <Outlet />
+          </div>
         </main>
       </div>
     );
