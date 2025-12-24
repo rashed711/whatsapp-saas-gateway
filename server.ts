@@ -45,7 +45,7 @@ const loadSessions = async () => {
     try {
         if (!MONGO_URI) {
             console.error('MONGO_URI is missing in .env.local');
-            return;
+            return false;
         }
 
         console.log('Connecting to MongoDB...');
@@ -75,13 +75,14 @@ const loadSessions = async () => {
             }
         }
         console.log(`Loaded ${sessions.size} active sessions from DB.`);
+        return true;
     } catch (error) {
         console.error('Failed to load sessions or connect to DB:', error);
+        return false;
     }
 };
 
-// Initialize
-loadSessions();
+
 
 // Stats (Mock/Simple In-Memory)
 let stats = {

@@ -1,12 +1,20 @@
 import express from 'express';
 import { createServer } from 'http';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import mongoose from 'mongoose';
 import { WhatsAppEngine } from './services/whatsappEngine.js';
 import { SessionModel } from './models/Session.js';
+import { UserModel } from './models/User.js';
 import dotenv from 'dotenv';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 dotenv.config({ path: '.env.local' });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const app = express();
+app.use(express.json()); // Middleware to parse JSON
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     maxHttpBufferSize: 1e7, // 10 MB
@@ -15,39 +23,45 @@ const io = new Server(httpServer, {
         methods: ["GET", "POST"]
     }
 });
-const sessions = new Map();
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-it';
 const MONGO_URI = process.env.MONGO_URI || "";
+const sessions = new Map();
 // Helper: Load sessions from MongoDB
 const loadSessions = async () => {
     try {
         if (!MONGO_URI) {
             console.error('MONGO_URI is missing in .env.local');
-            return;
+            return false;
         }
         console.log('Connecting to MongoDB...');
         await mongoose.connect(MONGO_URI);
         console.log('Connected to MongoDB.');
         const storedSessions = await SessionModel.find();
         for (const s of storedSessions) {
-            const engine = new WhatsAppEngine('master-user', s.id);
-            sessions.set(s.id, { id: s.id, name: s.name, engine });
-            // Auto-start if previously connected? 
-            // For now, we instantiate the engine but don't auto-connect unless requested, 
-            // OR we can try to restore connection immediately:
+            // Check if session has a valid userId, otherwise skip or assign to default if needed
+            // For SaaS, we ignore orphaned sessions or delete them
+            if (!s.userId)
+                continue;
+            const engine = new WhatsAppEngine(s.userId.toString(), s.id);
+            sessions.set(s.id, {
+                id: s.id,
+                name: s.name,
+                userId: s.userId.toString(),
+                engine
+            });
             if (s.status === 'CONNECTED') {
-                console.log(`[Startup] Attempting to resume session ${s.id}...`);
-                engine.startSession((qr) => console.log(`[Startup] QR generated for ${s.id}`), // No socket client yet
-                () => console.log(`[Startup] Session ${s.id} resumed!`)).catch(err => console.error(`[Startup] Failed to resume ${s.id}`, err));
+                console.log(`[Startup] Attempting to resume session ${s.id} for user ${s.userId}...`);
+                engine.startSession((qr) => console.log(`[Startup] QR generated for ${s.id}`), () => console.log(`[Startup] Session ${s.id} resumed!`)).catch(err => console.error(`[Startup] Failed to resume ${s.id}`, err));
             }
         }
-        console.log(`Loaded ${sessions.size} sessions from DB.`);
+        console.log(`Loaded ${sessions.size} active sessions from DB.`);
+        return true;
     }
     catch (error) {
         console.error('Failed to load sessions or connect to DB:', error);
+        return false;
     }
 };
-// Initialize
-loadSessions();
 // Stats (Mock/Simple In-Memory)
 let stats = {
     messagesToday: 0,
@@ -68,10 +82,9 @@ app.get('/stats', (req, res) => {
 app.get('/', (req, res) => {
     res.send('WhatsApp Backend Server is running and reachable (MongoDB Enabled)!');
 });
-// Middleware for API
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-// Global CORS Middleware for API routes
+// Global CORS
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -81,28 +94,129 @@ app.use((req, res, next) => {
     }
     next();
 });
-// --- API Endpoints for Individual Numbers ---
-// Get Session Status
-app.get('/api/sessions/:sessionId/status', (req, res) => {
-    const { sessionId } = req.params;
-    const session = sessions.get(sessionId);
-    if (!session) {
-        return res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
-    }
-    res.json({
-        sessionId: session.id,
-        name: session.name,
-        status: session.engine.currentStatus
+// Middleware: Authenticate Token & Optional Admin Check
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    if (token == null)
+        return res.sendStatus(401);
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err)
+            return res.sendStatus(403);
+        req.user = user;
+        next();
     });
+};
+const requireAdmin = (req, res, next) => {
+    if (req.user && req.user.role === 'admin') {
+        next();
+    }
+    else {
+        res.status(403).json({ error: 'Admin access required' });
+    }
+};
+// Seed Admin User
+const seedAdmin = async () => {
+    try {
+        const adminExists = await UserModel.findOne({ role: 'admin' });
+        if (!adminExists) {
+            console.log('Seeding default admin...');
+            const hashedPassword = await bcrypt.hash('admin123', 10);
+            await UserModel.create({
+                name: 'System Admin',
+                email: 'admin@admin.com',
+                password: hashedPassword,
+                role: 'admin'
+            });
+            console.log('Default admin created: admin@admin.com / admin123');
+        }
+    }
+    catch (error) {
+        console.error('Failed to seed admin:', error);
+    }
+};
+const PORT = 3050;
+// Initialize & Start Server
+const startServer = async () => {
+    const dbConnected = await loadSessions();
+    if (dbConnected) {
+        await seedAdmin();
+    }
+    httpServer.listen(PORT, () => {
+        console.log(`Backend Server running on port ${PORT}`);
+    });
+};
+startServer();
+// --- Auth Routes ---
+// Register (Now Protected - Admin Only)
+app.post('/api/auth/register', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { name, email, password } = req.body;
+        if (!name || !email || !password)
+            return res.status(400).json({ error: 'Missing fields' });
+        const existingUser = await UserModel.findOne({ email });
+        if (existingUser)
+            return res.status(400).json({ error: 'Email already exists' });
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = await UserModel.create({ name, email, password: hashedPassword, role: 'user' });
+        res.json({ message: 'User created successfully', user: { id: user._id, name: user.name, email: user.email } });
+    }
+    catch (error) {
+        console.error('Register error', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
 });
-// Send Message (Text, Image, etc) via HTTP
-app.post('/api/sessions/:sessionId/send', async (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const user = await UserModel.findOne({ email });
+        if (!user)
+            return res.status(400).json({ error: 'User not found' });
+        const validPassword = await bcrypt.compare(password, user.password);
+        if (!validPassword)
+            return res.status(400).json({ error: 'Invalid password' });
+        const token = jwt.sign({ userId: user._id, email: user.email, role: user.role }, JWT_SECRET);
+        res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+    }
+    catch (error) {
+        console.error('Login error', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+app.get('/api/me', authenticateToken, async (req, res) => {
+    const user = await UserModel.findById(req.user.userId).select('-password');
+    res.json(user);
+});
+// List Users (Admin Only)
+app.get('/api/users', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const users = await UserModel.find({}, '-password').sort({ createdAt: -1 });
+        res.json(users);
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to fetch users' });
+    }
+});
+// --- Secured API Endpoints ---
+// Get User's Sessions
+app.get('/api/sessions', authenticateToken, async (req, res) => {
+    const userSessions = Array.from(sessions.values())
+        .filter(s => s.userId === req.user.userId)
+        .map(s => ({
+        id: s.id,
+        name: s.name,
+        status: s.engine.currentStatus
+    }));
+    res.json(userSessions);
+});
+// Send Message (Secured)
+app.post('/api/sessions/:sessionId/send', authenticateToken, async (req, res) => {
     const { sessionId } = req.params;
-    // Expected body: { number: "...", type: "text|image...", content: "...", caption: "..." }
     const { number, type, content, caption } = req.body;
     const session = sessions.get(sessionId);
-    if (!session) {
-        return res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+    // Isolation Check
+    if (!session || session.userId !== req.user.userId) {
+        return res.status(404).json({ error: 'Session not found or access denied', code: 'SESSION_NOT_FOUND' });
     }
     if (session.engine.currentStatus !== 'CONNECTED') {
         return res.status(400).json({ error: 'Session is not connected', code: 'SESSION_NOT_CONNECTED' });
@@ -129,7 +243,6 @@ app.post('/api/sessions/:sessionId/send', async (req, res) => {
         if (!validTypes.includes(type)) {
             return res.status(400).json({ error: `Invalid type. Supported: ${validTypes.join(', ')}` });
         }
-        // Send
         await session.engine.send(finalNumber, type, content, caption);
         return res.json({ success: true, message: 'Message sent successfully', timestamp: Date.now() });
     }
@@ -138,32 +251,51 @@ app.post('/api/sessions/:sessionId/send', async (req, res) => {
         return res.status(500).json({ error: error.message || 'Internal Server Error' });
     }
 });
+// --- Socket.IO with Auth ---
+io.use((socket, next) => {
+    const token = socket.handshake.auth.token;
+    if (!token) {
+        return next(new Error("Authentication error"));
+    }
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err)
+            return next(new Error("Authentication error"));
+        socket.data.user = decoded;
+        next();
+    });
+});
 io.on('connection', (socket) => {
-    console.log('Frontend connected:', socket.id);
-    // List Sessions
+    const userId = socket.data.user.userId;
+    console.log(`User connected: ${userId}`);
+    // Join user room for private updates
+    socket.join(`user:${userId}`);
+    // List Sessions (Filtered by User)
     socket.on('list-sessions', () => {
-        const sessionList = Array.from(sessions.values()).map(s => ({
+        const userSessions = Array.from(sessions.values())
+            .filter(s => s.userId === userId)
+            .map(s => ({
             id: s.id,
             name: s.name,
             status: s.engine.currentStatus
         }));
-        socket.emit('sessions-list', sessionList);
+        socket.emit('sessions-list', userSessions);
     });
     // Create Session
     socket.on('create-session', async ({ name }, callback) => {
         try {
             const sessionId = 'sess_' + Date.now();
-            const engine = new WhatsAppEngine('master-user', sessionId);
-            sessions.set(sessionId, { id: sessionId, name, engine });
-            // Persist to MongoDB
+            const engine = new WhatsAppEngine(userId, sessionId); // Use userId for auth storage separation
+            sessions.set(sessionId, { id: sessionId, name, userId, engine });
+            // Persist to MongoDB with userId
             try {
-                await SessionModel.create({ id: sessionId, name, status: 'IDLE' });
+                await SessionModel.create({ id: sessionId, name, userId, status: 'IDLE' });
             }
             catch (saveError) {
                 console.error('Failed to save session to DB:', saveError);
             }
             socket.emit('session-created', { id: sessionId, name, status: 'IDLE' });
-            io.emit('sessions-updated');
+            // Only update this user
+            io.to(`user:${userId}`).emit('sessions-updated');
             if (typeof callback === 'function') {
                 callback({ sessionId });
             }
@@ -178,38 +310,36 @@ io.on('connection', (socket) => {
     // Delete Session
     socket.on('delete-session', async ({ sessionId }) => {
         const session = sessions.get(sessionId);
-        if (session) {
-            await session.engine.logout(); // Cleans up auth data in DB
+        // Ownership check
+        if (session && session.userId === userId) {
+            await session.engine.logout();
             sessions.delete(sessionId);
-            // Remove from DB
             try {
-                await SessionModel.deleteOne({ id: sessionId });
+                await SessionModel.deleteOne({ id: sessionId, userId });
             }
             catch (e) {
                 console.error('Failed to delete session from DB:', e);
             }
-            io.emit('sessions-updated');
+            io.to(`user:${userId}`).emit('sessions-updated');
         }
     });
     // Start Session (Connect)
     socket.on('start-session', async ({ sessionId }) => {
-        console.log(`Request to start session ${sessionId}`);
         const session = sessions.get(sessionId);
-        if (!session)
+        if (!session || session.userId !== userId)
             return socket.emit('error', 'Session not found');
         try {
             socket.emit('session-status', { sessionId, status: 'connecting' });
             await session.engine.startSession((qrCodeDataUrl) => {
                 socket.emit('session-qr', { sessionId, qr: qrCodeDataUrl });
                 socket.emit('session-status', { sessionId, status: 'qr' });
-                // Update DB status?
                 SessionModel.updateOne({ id: sessionId }, { status: 'QR' }).exec();
-                io.emit('sessions-updated');
+                io.to(`user:${userId}`).emit('sessions-updated');
             }, () => {
                 console.log(`Session ${sessionId} connected!`);
                 socket.emit('session-status', { sessionId, status: 'connected' });
                 SessionModel.updateOne({ id: sessionId }, { status: 'CONNECTED' }).exec();
-                io.emit('sessions-updated');
+                io.to(`user:${userId}`).emit('sessions-updated');
             });
         }
         catch (error) {
@@ -221,11 +351,12 @@ io.on('connection', (socket) => {
     socket.on('send-message', async (data) => {
         const { sessionId, numbers, type, content, caption, minDelay = 3, maxDelay = 10 } = data;
         const session = sessions.get(sessionId);
-        if (!session) {
-            socket.emit('message-status', { error: 'Invalid Session ID' });
+        // Security Check
+        if (!session || session.userId !== userId) {
+            socket.emit('message-status', { error: 'Invalid Session or Access Denied' });
             return;
         }
-        console.log(`Message request for session ${sessionId}:`, data);
+        console.log(`Message request for session ${sessionId} by user ${userId}`);
         if (!numbers || !Array.isArray(numbers) || numbers.length === 0) {
             socket.emit('message-status', { error: 'No numbers provided' });
             return;
@@ -246,12 +377,11 @@ io.on('connection', (socket) => {
             return clean;
         };
         const uniqueNumbers = [...new Set(numbers.map((n) => normalizeNumber(n)).filter((n) => n.length >= 10))];
-        console.log(`[Batch] Received ${numbers.length} numbers. Unique valid targets: ${uniqueNumbers.length}`);
         if (uniqueNumbers.length === 0) {
-            socket.emit('message-status', { error: 'No valid numbers found after normalization' });
+            socket.emit('message-status', { error: 'No valid numbers found' });
             return;
         }
-        io.emit('message-progress', {
+        socket.emit('message-progress', {
             sessionId,
             current: 0,
             total: uniqueNumbers.length,
@@ -261,10 +391,8 @@ io.on('connection', (socket) => {
             try {
                 if (index > 0) {
                     const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1) + minDelay);
-                    console.log(`[Batch] Waiting ${delay}s before next message...`);
                     await new Promise(resolve => setTimeout(resolve, delay * 1000));
                 }
-                console.log(`[Batch] Processing ${index + 1}/${uniqueNumbers.length}: ${number}`);
                 const finalNumber = number;
                 // Validate
                 try {
@@ -272,10 +400,8 @@ io.on('connection', (socket) => {
                         session.engine.validateNumber(finalNumber),
                         new Promise((_, reject) => setTimeout(() => reject(new Error('Validation timeout')), 15000))
                     ]);
-                    if (!isValid) {
-                        console.warn(`[Batch] Number ${finalNumber} is not active on WhatsApp.`);
+                    if (!isValid)
                         throw new Error("Number not active on WhatsApp");
-                    }
                 }
                 catch (valError) {
                     throw new Error(`Validation failed: ${valError.message}`);
@@ -287,10 +413,8 @@ io.on('connection', (socket) => {
                     session.engine.send(finalNumber, type, personalizedContent, personalizedCaption),
                     new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout')), 40000))
                 ]);
-                console.log(`[Batch] Sent to ${finalNumber} successfully.`);
                 successCount++;
-                stats.messagesToday++;
-                io.emit('message-progress', {
+                socket.emit('message-progress', {
                     sessionId,
                     current: index + 1,
                     total: uniqueNumbers.length,
@@ -299,9 +423,8 @@ io.on('connection', (socket) => {
                 });
             }
             catch (error) {
-                console.error(`[Batch] Failed to send to ${number}:`, error);
                 failCount++;
-                io.emit('message-progress', {
+                socket.emit('message-progress', {
                     sessionId,
                     current: index + 1,
                     total: uniqueNumbers.length,
@@ -311,21 +434,21 @@ io.on('connection', (socket) => {
                 });
             }
         }
-        console.log(`[Batch] Finished. Success: ${successCount}, Failed: ${failCount}`);
-        io.emit('message-complete', { sessionId, success: successCount, failed: failCount });
+        socket.emit('message-complete', { sessionId, success: successCount, failed: failCount });
     });
     // Logout
     socket.on('logout', async ({ sessionId }) => {
         const session = sessions.get(sessionId);
-        if (session) {
+        if (session && session.userId === userId) {
             await session.engine.logout();
             socket.emit('session-status', { sessionId, status: 'disconnected' });
             SessionModel.updateOne({ id: sessionId }, { status: 'DISCONNECTED' }).exec();
-            io.emit('sessions-updated');
+            io.to(`user:${userId}`).emit('sessions-updated');
         }
     });
 });
-const PORT = 3050;
-httpServer.listen(PORT, () => {
-    console.log(`Backend Server running on port ${PORT}`);
-});
+// Serve Static Frontend (Production) - DISABLED (Vercel hosts frontend)
+// app.use(express.static(path.join(__dirname, 'dist')));
+// app.get('*', (req, res) => {
+//    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// });
