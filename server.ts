@@ -520,7 +520,4 @@ io.on('connection', (socket) => {
 //    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 // });
 
-const PORT = 3050;
-httpServer.listen(PORT, () => {
-    console.log(`Backend Server running on port ${PORT}`);
-});
+
