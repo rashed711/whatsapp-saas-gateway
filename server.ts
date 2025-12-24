@@ -153,12 +153,22 @@ const seedAdmin = async () => {
             const hashedPassword = await bcrypt.hash('admin123', 10);
             await UserModel.create({
                 name: 'System Admin',
-                username: 'admin@admin.com', // Default username
+                username: 'admin@admin.com',
                 password: hashedPassword,
                 role: 'admin',
                 isActive: true
             });
             console.log('Default admin created: admin@admin.com / admin123');
+        } else {
+            // Migration Fix: Ensure existing admin has a username and is active
+            if (!adminExists.username) {
+                console.log('Migrating Admin user to new schema...');
+                await UserModel.updateOne(
+                    { _id: adminExists._id },
+                    { $set: { username: 'admin@admin.com', isActive: true } }
+                );
+                console.log('Admin user migrated: username set to admin@admin.com');
+            }
         }
     } catch (error) {
         console.error('Failed to seed admin:', error);
