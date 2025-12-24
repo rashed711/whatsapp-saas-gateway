@@ -1,5 +1,7 @@
 import express from 'express';
 import { createServer } from 'http';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import mongoose from 'mongoose';
 import { WhatsAppEngine } from './services/whatsappEngine.js';
@@ -10,6 +12,9 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 dotenv.config({ path: '.env.local' });
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const httpServer = createServer(app);
@@ -505,6 +510,14 @@ io.on('connection', (socket) => {
             io.to(`user:${userId}`).emit('sessions-updated');
         }
     });
+});
+
+
+// Serve Static Frontend (Production)
+app.use(express.static(path.join(__dirname, 'dist')));
+
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 const PORT = 3050;
