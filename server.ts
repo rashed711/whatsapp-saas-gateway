@@ -114,7 +114,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Global CORS
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
@@ -252,6 +252,14 @@ app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res)
         const { id } = req.params;
         const { name, username, password, isActive } = req.body;
 
+        // Prevent suspending Admin
+        const targetUser = await UserModel.findById(id);
+        if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+        if (targetUser.role === 'admin' && isActive === false) {
+            return res.status(403).json({ error: 'Cannot suspend an admin account' });
+        }
+
         const updateData: any = { name, username, isActive };
         if (password && password.trim() !== '') {
             updateData.password = await bcrypt.hash(password, 10);
@@ -268,6 +276,15 @@ app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res)
 app.delete('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res) => {
     try {
         const { id } = req.params;
+
+        // Check if target is admin
+        const targetUser = await UserModel.findById(id);
+        if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+        if (targetUser.role === 'admin') {
+            return res.status(403).json({ error: 'Cannot delete an admin account' });
+        }
+
         await UserModel.findByIdAndDelete(id);
         // Also delete their sessions
         await SessionModel.deleteMany({ userId: id });
