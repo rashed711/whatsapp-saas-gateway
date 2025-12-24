@@ -7,7 +7,7 @@ interface LoginProps {
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
-    const [email, setEmail] = useState('');
+    const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
@@ -27,7 +27,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ email, password }),
+                body: JSON.stringify({ username, password }),
             });
 
             const text = await response.text();
@@ -78,15 +78,15 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-1">البريد الإلكتروني</label>
+                        <label className="block text-sm font-medium text-slate-400 mb-1">اسم المستخدم</label>
                         <div className="relative">
                             <Mail className="absolute right-3 top-3 text-slate-500" size={20} />
                             <input
-                                type="email"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
+                                type="text"
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
                                 className="w-full bg-slate-900 border border-slate-700 text-white pr-10 pl-4 py-3 rounded-xl focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
-                                placeholder="name@company.com"
+                                placeholder="اسم المستخدم أو البريد الإلكتروني"
                                 required
                             />
                         </div>

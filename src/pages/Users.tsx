@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { UserPlus, User, Mail, Lock, AlertCircle, Trash2 } from 'lucide-react';
+import { UserPlus, User, Lock, AlertCircle, Trash2, Edit2, Ban, CheckCircle, X } from 'lucide-react';
 
 const Users = () => {
     const [users, setUsers] = useState<any[]>([]);
-    const [name, setName] = useState('');
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
+
+    // Create Form State
+    const [createForm, setCreateForm] = useState({ name: '', username: '', password: '' });
+
+    // Edit Form State
+    const [editingUser, setEditingUser] = useState<any | null>(null);
+    const [editForm, setEditForm] = useState({ name: '', username: '', password: '', isActive: true });
+
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [loading, setLoading] = useState(false);
@@ -14,13 +19,16 @@ const Users = () => {
         fetchUsers();
     }, []);
 
+    const getApiUrl = () => {
+        let url = import.meta.env.VITE_API_URL || '';
+        if (url.endsWith('/')) url = url.slice(0, -1);
+        return url;
+    };
+
     const fetchUsers = async () => {
         try {
-            let API_URL = import.meta.env.VITE_API_URL || '';
-            if (API_URL.endsWith('/')) API_URL = API_URL.slice(0, -1);
-
             const token = localStorage.getItem('token');
-            const res = await fetch(`${API_URL}/api/users`, {
+            const res = await fetch(`${getApiUrl()}/api/users`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (res.ok) {
@@ -34,34 +42,21 @@ const Users = () => {
 
     const handleCreateUser = async (e: React.FormEvent) => {
         e.preventDefault();
-        setError('');
-        setSuccess('');
-        setLoading(true);
+        setError(''); setSuccess(''); setLoading(true);
 
         try {
-            let API_URL = import.meta.env.VITE_API_URL || '';
-            if (API_URL.endsWith('/')) API_URL = API_URL.slice(0, -1);
-
             const token = localStorage.getItem('token');
-            const response = await fetch(`${API_URL}/api/auth/register`, {
+            const response = await fetch(`${getApiUrl()}/api/auth/register`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ name, email, password }),
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify(createForm),
             });
 
             const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.error || 'Failed to create user');
-            }
+            if (!response.ok) throw new Error(data.error || 'Failed to create user');
 
             setSuccess('تم إنشاء المستخدم بنجاح');
-            setName('');
-            setEmail('');
-            setPassword('');
+            setCreateForm({ name: '', username: '', password: '' });
             fetchUsers();
         } catch (err: any) {
             setError(err.message);
@@ -70,84 +65,116 @@ const Users = () => {
         }
     };
 
+    const handleEditClick = (user: any) => {
+        setEditingUser(user);
+        setEditForm({
+            name: user.name,
+            username: user.username,
+            password: '',
+            isActive: user.isActive
+        });
+        setError(''); setSuccess('');
+    };
+
+    const handleUpdateUser = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!editingUser) return;
+        setLoading(true);
+
+        try {
+            const token = localStorage.getItem('token');
+            const response = await fetch(`${getApiUrl()}/api/users/${editingUser._id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify(editForm),
+            });
+
+            if (!response.ok) throw new Error('Failed to update user');
+
+            setSuccess('تم تحديث بيانات المستخدم');
+            setEditingUser(null);
+            fetchUsers();
+        } catch (err: any) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleDeleteUser = async (id: string, name: string) => {
+        if (!window.confirm(`هل أنت متأكد من حذف المستخدم "${name}" نهائياً؟`)) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            const response = await fetch(`${getApiUrl()}/api/users/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (!response.ok) throw new Error('Failed to delete');
+            fetchUsers();
+            setSuccess(`تم حذف المستخدم ${name}`);
+        } catch (err: any) {
+            setError(err.message);
+        }
+    };
+
+    const toggleSuspend = async (user: any) => {
+        const action = user.isActive ? 'إيقاف' : 'تفعيل';
+        if (!window.confirm(`هل تريد ${action} حساب "${user.name}"؟`)) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            const response = await fetch(`${getApiUrl()}/api/users/${user._id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ ...user, isActive: !user.isActive }),
+            });
+
+            if (!response.ok) throw new Error('Failed to update status');
+            fetchUsers();
+        } catch (err: any) {
+            setError(err.message);
+        }
+    };
+
     return (
         <div className="space-y-6">
             <h2 className="text-2xl font-bold text-slate-800">إدارة المستخدمين</h2>
 
-            {/* Create User Form */}
+            {/* Notifications */}
+            {error && <div className="bg-red-50 text-red-500 p-3 rounded-xl flex items-center gap-2"><AlertCircle size={16} /> {error}</div>}
+            {success && <div className="bg-emerald-50 text-emerald-500 p-3 rounded-xl flex items-center gap-2"><CheckCircle size={16} /> {success}</div>}
+
+            {/* Create User Section */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                 <h3 className="text-lg font-bold text-slate-700 mb-4 flex items-center gap-2">
                     <UserPlus size={20} className="text-emerald-500" />
                     إضافة مستخدم جديد
                 </h3>
-
-                {error && (
-                    <div className="bg-red-50 text-red-500 p-3 rounded-xl mb-4 text-sm font-bold flex items-center gap-2">
-                        <AlertCircle size={16} /> {error}
-                    </div>
-                )}
-                {success && (
-                    <div className="bg-emerald-50 text-emerald-500 p-3 rounded-xl mb-4 text-sm font-bold">
-                        {success}
-                    </div>
-                )}
-
                 <form onSubmit={handleCreateUser} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                        <label className="block text-sm font-medium text-slate-500 mb-1">الاسم</label>
-                        <input
-                            type="text"
-                            value={name}
-                            onChange={(e) => setName(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl focus:outline-none focus:border-emerald-500"
-                            required
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-500 mb-1">البريد الإلكتروني</label>
-                        <input
-                            type="email"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl focus:outline-none focus:border-emerald-500"
-                            required
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-500 mb-1">كلمة المرور</label>
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl focus:outline-none focus:border-emerald-500"
-                            required
-                        />
-                    </div>
+                    <input type="text" placeholder="الاسم" value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} className="bg-slate-50 border p-3 rounded-xl" required />
+                    <input type="text" placeholder="اسم المستخدم" value={createForm.username} onChange={(e) => setCreateForm({ ...createForm, username: e.target.value })} className="bg-slate-50 border p-3 rounded-xl" required />
+                    <input type="password" placeholder="كلمة المرور" value={createForm.password} onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })} className="bg-slate-50 border p-3 rounded-xl" required />
                     <div className="md:col-span-3 flex justify-end">
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-8 rounded-xl transition-all disabled:opacity-50"
-                        >
+                        <button type="submit" disabled={loading} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-8 rounded-xl transition-all disabled:opacity-50">
                             {loading ? 'جاري الإضافة...' : 'إضافة المستخدم'}
                         </button>
                     </div>
                 </form>
             </div>
 
-            {/* Users List */}
+            {/* Users List Table */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-slate-100">
-                    <h3 className="text-lg font-bold text-slate-700">المستخدمين المسجلين</h3>
-                </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-right">
                         <thead className="bg-slate-50 text-slate-500 text-sm">
                             <tr>
                                 <th className="p-4">الاسم</th>
-                                <th className="p-4">البريد الإلكتروني</th>
-                                <th className="p-4">التاريخ</th>
+                                <th className="p-4">اسم المستخدم</th>
+                                <th className="p-4">الحالة</th>
                                 <th className="p-4">الصلاحية</th>
+                                <th className="p-4">إجراءات</th>
                             </tr>
                         </thead>
                         <tbody className="text-slate-700">
@@ -159,26 +186,69 @@ const Users = () => {
                                         </div>
                                         {user.name}
                                     </td>
-                                    <td className="p-4">{user.email}</td>
-                                    <td className="p-4 text-sm text-slate-500">
-                                        {new Date(user.createdAt).toLocaleDateString('ar-EG')}
+                                    <td className="p-4">{user.username}</td>
+                                    <td className="p-4">
+                                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${user.isActive ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                            {user.isActive ? 'نشط' : 'موقوف'}
+                                        </span>
                                     </td>
                                     <td className="p-4">
                                         <span className={`px-2 py-1 rounded text-xs font-bold ${user.role === 'admin' ? 'bg-purple-100 text-purple-600' : 'bg-slate-100 text-slate-600'}`}>
                                             {user.role === 'admin' ? 'أدمن' : 'مستخدم'}
                                         </span>
                                     </td>
+                                    <td className="p-4 flex gap-2">
+                                        <button onClick={() => handleEditClick(user)} className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg" title="تعديل">
+                                            <Edit2 size={18} />
+                                        </button>
+                                        <button onClick={() => toggleSuspend(user)} className={`p-2 rounded-lg ${user.isActive ? 'text-amber-500 hover:bg-amber-50' : 'text-green-500 hover:bg-green-50'}`} title={user.isActive ? 'إيقاف الحساب' : 'تفعيل الحساب'}>
+                                            {user.isActive ? <Ban size={18} /> : <CheckCircle size={18} />}
+                                        </button>
+                                        <button onClick={() => handleDeleteUser(user._id, user.name)} className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg" title="حذف">
+                                            <Trash2 size={18} />
+                                        </button>
+                                    </td>
                                 </tr>
                             ))}
-                            {users.length === 0 && (
-                                <tr>
-                                    <td colSpan={4} className="p-8 text-center text-slate-400">لا يوجد مستخدمين</td>
-                                </tr>
-                            )}
+                            {users.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">لا يوجد مستخدمين</td></tr>}
                         </tbody>
                     </table>
                 </div>
             </div>
+
+            {/* Edit Modal */}
+            {editingUser && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-2xl w-full max-w-md p-6">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-xl font-bold">تعديل المستخدم</h3>
+                            <button onClick={() => setEditingUser(null)} className="text-slate-400 hover:text-slate-600"><X /></button>
+                        </div>
+                        <form onSubmit={handleUpdateUser} className="space-y-4">
+                            <div>
+                                <label className="block text-sm mb-1">الاسم</label>
+                                <input type="text" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} className="w-full border p-2 rounded-lg" required />
+                            </div>
+                            <div>
+                                <label className="block text-sm mb-1">اسم المستخدم</label>
+                                <input type="text" value={editForm.username} onChange={(e) => setEditForm({ ...editForm, username: e.target.value })} className="w-full border p-2 rounded-lg" required />
+                            </div>
+                            <div>
+                                <label className="block text-sm mb-1">كلمة المرور الجديدة (اختياري)</label>
+                                <input type="password" value={editForm.password} onChange={(e) => setEditForm({ ...editForm, password: e.target.value })} className="w-full border p-2 rounded-lg" placeholder="اتركها فارغة للإبقاء على القديمة" />
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <input type="checkbox" checked={editForm.isActive} onChange={(e) => setEditForm({ ...editForm, isActive: e.target.checked })} className="w-5 h-5 accent-emerald-500" />
+                                <label>حساب نشط</label>
+                            </div>
+                            <div className="flex gap-3 mt-6">
+                                <button type="submit" className="flex-1 bg-emerald-500 text-white py-2 rounded-lg font-bold hover:bg-emerald-600">حفظ التغييرات</button>
+                                <button type="button" onClick={() => setEditingUser(null)} className="flex-1 bg-slate-100 text-slate-600 py-2 rounded-lg font-bold hover:bg-slate-200">إلغاء</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

@@ -153,9 +153,10 @@ const seedAdmin = async () => {
             const hashedPassword = await bcrypt.hash('admin123', 10);
             await UserModel.create({
                 name: 'System Admin',
-                email: 'admin@admin.com',
+                username: 'admin@admin.com', // Default username
                 password: hashedPassword,
-                role: 'admin'
+                role: 'admin',
+                isActive: true
             });
             console.log('Default admin created: admin@admin.com / admin123');
         }
@@ -185,16 +186,16 @@ startServer();
 // Register (Now Protected - Admin Only)
 app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any, res: any) => {
     try {
-        const { name, email, password } = req.body;
-        if (!name || !email || !password) return res.status(400).json({ error: 'Missing fields' });
+        const { name, username, password } = req.body;
+        if (!name || !username || !password) return res.status(400).json({ error: 'Missing fields' });
 
-        const existingUser = await UserModel.findOne({ email });
-        if (existingUser) return res.status(400).json({ error: 'Email already exists' });
+        const existingUser = await UserModel.findOne({ username });
+        if (existingUser) return res.status(400).json({ error: 'Username already exists' });
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await UserModel.create({ name, email, password: hashedPassword, role: 'user' });
+        const user = await UserModel.create({ name, username, password: hashedPassword, role: 'user', isActive: true });
 
-        res.json({ message: 'User created successfully', user: { id: user._id, name: user.name, email: user.email } });
+        res.json({ message: 'User created successfully', user: { id: user._id, name: user.name, username: user.username } });
     } catch (error) {
         console.error('Register error', error);
         res.status(500).json({ error: 'Internal Server Error' });
@@ -203,15 +204,17 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any,
 
 app.post('/api/auth/login', async (req, res) => {
     try {
-        const { email, password } = req.body;
-        const user = await UserModel.findOne({ email });
+        const { username, password } = req.body; // Changed email to username
+        const user = await UserModel.findOne({ username });
         if (!user) return res.status(400).json({ error: 'User not found' });
+
+        if (user.isActive === false) return res.status(403).json({ error: 'Account is suspended' });
 
         const validPassword = await bcrypt.compare(password, user.password);
         if (!validPassword) return res.status(400).json({ error: 'Invalid password' });
 
-        const token = jwt.sign({ userId: user._id, email: user.email, role: user.role }, JWT_SECRET);
-        res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+        const token = jwt.sign({ userId: user._id, username: user.username, role: user.role }, JWT_SECRET);
+        res.json({ token, user: { id: user._id, name: user.name, username: user.username, role: user.role } });
     } catch (error) {
         console.error('Login error', error);
         res.status(500).json({ error: 'Internal Server Error' });
@@ -230,6 +233,56 @@ app.get('/api/users', authenticateToken, requireAdmin, async (req: any, res) => 
         res.json(users);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch users' });
+    }
+});
+
+// Update User (Admin Only)
+app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res) => {
+    try {
+        const { id } = req.params;
+        const { name, username, password, isActive } = req.body;
+
+        const updateData: any = { name, username, isActive };
+        if (password && password.trim() !== '') {
+            updateData.password = await bcrypt.hash(password, 10);
+        }
+
+        const updatedUser = await UserModel.findByIdAndUpdate(id, updateData, { new: true }).select('-password');
+        res.json(updatedUser);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update user' });
+    }
+});
+
+// Delete User (Admin Only)
+app.delete('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res) => {
+    try {
+        const { id } = req.params;
+        await UserModel.findByIdAndDelete(id);
+        // Also delete their sessions
+        await SessionModel.deleteMany({ userId: id });
+        res.json({ message: 'User deleted' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete user' });
+    }
+});
+
+// Change Password (Self)
+app.post('/api/auth/change-password', authenticateToken, async (req: any, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+        const user = await UserModel.findById(req.user.userId);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const isMatch = await bcrypt.compare(oldPassword, user.password);
+        if (!isMatch) return res.status(400).json({ error: 'Incorrect old password' });
+
+        user.password = await bcrypt.hash(newPassword, 10);
+        await user.save();
+
+        res.json({ message: 'Password updated successfully' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update password' });
     }
 });
 
