@@ -163,9 +163,21 @@ const seedAdmin = async () => {
     }
 };
 
-// Initialize
-loadSessions();
-seedAdmin();
+const PORT = 3050;
+
+// Initialize & Start Server
+const startServer = async () => {
+    const dbConnected = await loadSessions();
+    if (dbConnected) {
+        await seedAdmin();
+    }
+
+    httpServer.listen(PORT, () => {
+        console.log(`Backend Server running on port ${PORT}`);
+    });
+};
+
+startServer();
 
 // --- Auth Routes ---
 
