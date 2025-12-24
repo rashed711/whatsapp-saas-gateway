@@ -19,7 +19,9 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         setLoading(true);
 
         try {
-            const API_URL = import.meta.env.VITE_API_URL || '';
+            let API_URL = import.meta.env.VITE_API_URL || '';
+            if (API_URL.endsWith('/')) API_URL = API_URL.slice(0, -1);
+
             const response = await fetch(`${API_URL}/api/auth/login`, {
                 method: 'POST',
                 headers: {
