@@ -1,17 +1,14 @@
 
 /**
  * WhatsApp Engine (SaaS Core)
- * هذا المحرك مصمم للعمل في بيئة Node.js مع Baileys و MongoDB.
+ * This engine is designed to work in a Node.js environment with Baileys and MongoDB.
  */
 
-// ملاحظة: في بيئة التشغيل الفعلية (Node.js)، سنستخدم BufferJSON.stringify/parse 
-// للتعامل مع المفاتيح المشفرة داخل MongoDB.
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, BufferJSON, AuthenticationCreds, SignalDataTypeMap, initAuthCreds, AnyMessageContent } from '@whiskeysockets/baileys';
 import P from 'pino';
 import fs from 'fs/promises';
 import { getLinkPreview } from 'link-preview-js';
-
-
+import { AuthStateModel } from '../models/AuthState.js';
 
 export class WhatsAppEngine {
   private userId: string;
@@ -20,150 +17,168 @@ export class WhatsAppEngine {
   private sock: any = null;
 
   constructor(userId: string, sessionId: string) {
-    this.userId = userId;
+    this.userId = userId; // kept for compatibility, but we rely on sessionId mostly
     this.sessionId = sessionId;
   }
 
   /**
-   * دالة مخصصة لاسترجاع الجلسة من MongoDB.
-   * تقوم بتحويل JSON المخزن إلى مفاتيح Buffer صالحة لـ Baileys.
+   * Custom MongoDB Auth State for Baileys
    */
-  async getAuthFromDB() {
-    console.log(`[DB] محاولة استعادة الجلسة لـ ${this.userId}:${this.sessionId}...`);
-    // Logic: 
-    // const session = await SessionModel.findOne({ userId: this.userId, sessionId: this.sessionId });
-    // if (session) return BufferJSON.revive(session.authData);
-    return null;
+  async useMongoDBAuthState() {
+    const saveState = async () => {
+      // We write whenever keys are updated. 
+      // In this implementation, 'keys.set' does the writing.
+    };
+
+    return {
+      state: {
+        creds: await this.loadCreds(),
+        keys: {
+          get: async (type: string, ids: string[]) => {
+            const data: { [key: string]: any } = {};
+            for (const id of ids) {
+              const doc = await AuthStateModel.findOne({ sessionId: this.sessionId, key: `${type}:${id}` });
+              if (doc && doc.value) {
+                try {
+                  data[id] = JSON.parse(JSON.stringify(doc.value), BufferJSON.reviver);
+                } catch (e) {
+                  console.error(`[DB] Failed to parse key ${type}:${id}`, e);
+                }
+              }
+            }
+            return data;
+          },
+          set: async (data: any) => {
+            const ops: any[] = [];
+            for (const type in data) {
+              for (const id in data[type]) {
+                const value = data[type][id];
+                const key = `${type}:${id}`;
+                if (value === null || value === undefined) {
+                  ops.push({ deleteOne: { filter: { sessionId: this.sessionId, key } } });
+                } else {
+                  const serialized = JSON.parse(JSON.stringify(value, BufferJSON.replacer));
+                  ops.push({
+                    updateOne: {
+                      filter: { sessionId: this.sessionId, key },
+                      update: { $set: { value: serialized } },
+                      upsert: true
+                    }
+                  });
+                }
+              }
+            }
+            if (ops.length > 0) {
+              await AuthStateModel.bulkWrite(ops);
+            }
+          }
+        }
+      },
+      saveCreds: async () => {
+        if (this.sock?.authState?.creds) {
+          const serialized = JSON.parse(JSON.stringify(this.sock.authState.creds, BufferJSON.replacer));
+          await AuthStateModel.updateOne(
+            { sessionId: this.sessionId, key: 'creds' },
+            { value: serialized },
+            { upsert: true }
+          );
+        }
+      }
+    };
+  }
+
+  async loadCreds(): Promise<AuthenticationCreds> {
+    const doc = await AuthStateModel.findOne({ sessionId: this.sessionId, key: 'creds' });
+    if (doc && doc.value) {
+      return JSON.parse(JSON.stringify(doc.value), BufferJSON.reviver);
+    }
+    return initAuthCreds();
   }
 
   /**
-   * دالة حفظ الجلسة في MongoDB.
-   */
-  async saveAuthToDB(authData: any) {
-    console.log(`[DB] جاري مزامنة بيانات التشفير سحابياً...`);
-    // Logic:
-    // await SessionModel.updateOne({ userId: this.userId, sessionId: this.sessionId }, { authData: BufferJSON.stringify(authData) }, { upsert: true });
-  }
-
-  /**
-   * تهيئة الاتصال.
+   * Initialize Session
    */
   async startSession(onQR: (qr: string) => void, onConnected: () => void) {
     this.status = 'QR';
-    console.log(`[Engine] Starting Baileys socket for session ${this.sessionId}...`);
+    console.log(`[Engine] Starting Baileys socket for session ${this.sessionId} (MongoDB Auth)...`);
 
     try {
-      const authPath = `./auth_${this.userId}/${this.sessionId}`;
-      // Ensure directory exists
-      await fs.mkdir(authPath, { recursive: true });
+      // Use Custom MongoDB Auth
+      const { state, saveCreds } = await this.useMongoDBAuthState();
 
-      // إنشاء حالة المصادقة
-      const { state, saveCreds } = await useMultiFileAuthState(authPath);
-
-      // إنشاء socket للواتساب
+      // Create Socket
       this.sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        logger: P({ level: 'info' }), // Enable info logging to debug
-        browser: ['WhatsApp Gateway', 'Chrome', '1.0.0']
+        logger: P({ level: 'silent' }), // Reduce logs for production
+        browser: ['WhatsApp Gateway', 'Chrome', '1.0.0'],
+        defaultQueryTimeoutMs: 60000,
       });
 
-      // مراقبة تحديثات الاتصال واستلام الـ QR
-      this.sock.ev.on('connection.update', async (update) => {
-        console.log('[Engine] Connection update received:', { connection: update.connection, hasQR: !!update.qr });
+      // Handle Connection Updates
+      this.sock.ev.on('connection.update', async (update: any) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-          console.log('[Engine] QR Code string received from Baileys');
+          console.log(`[Engine] QR Code generated for ${this.sessionId}`);
           const qrDataUrl = `data:image/png;base64,${qr}`;
           onQR(qrDataUrl);
         }
+
         if (connection === 'open') {
+          console.log(`[Engine] Session ${this.sessionId} is now CONNECTED.`);
           this.status = 'CONNECTED';
           onConnected();
-          await saveCreds();
         } else if (connection === 'close') {
-          const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
+          const reason = (lastDisconnect?.error as any)?.output?.statusCode;
+          console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
+
+          const shouldReconnect = reason !== DisconnectReason.loggedOut;
+
           if (shouldReconnect) {
             console.log('[Engine] Reconnecting...');
-            this.startSession(onQR, onConnected);
+            // Add a small delay for stability
+            setTimeout(() => this.startSession(onQR, onConnected), 3000);
           } else {
-            console.log('[Engine] Connection closed, logged out.');
+            console.log('[Engine] Session logged out. Stopping.');
             this.status = 'ERROR';
+            await this.cleanupData();
           }
         }
       });
 
-      // حفظ بيانات الاعتماد عند تحديثها
+      // Handle Creds Update
       this.sock.ev.on('creds.update', saveCreds);
 
     } catch (error) {
       console.error('[Engine] Failed to start session:', error);
       this.status = 'ERROR';
-      throw error; // Re-throw to let server know
+      throw error;
     }
   }
 
   async send(to: string, type: 'text' | 'image' | 'audio' | 'video' | 'document', content: string, caption?: string) {
-    if (this.status !== 'CONNECTED' || !this.sock) throw new Error("الجهاز غير متصل!");
+    if (this.status !== 'CONNECTED' || !this.sock) throw new Error("Device is not connected!");
 
     const jid = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
-    console.log(`[API] إرسال ${type} إلى ${to}...`);
+    console.log(`[API] Sending ${type} to ${to}...`);
 
     try {
       if (type === 'text') {
-        // Detect URL for link preview
         const urlRegex = /(https?:\/\/[^\s]+)/g;
         const matchedUrl = content.match(urlRegex)?.[0];
 
         if (matchedUrl) {
-          try {
-            const previewData: any = await getLinkPreview(matchedUrl);
-
-            // Construct rich preview message
-            // Note: High quality thumbnail requires fetching and buffering the image
-            let thumbnail: Buffer | undefined = undefined;
-            if (previewData.images && previewData.images.length > 0) {
-              try {
-                const response = await fetch(previewData.images[0]);
-                const arrayBuffer = await response.arrayBuffer();
-                thumbnail = Buffer.from(arrayBuffer);
-              } catch (e) {
-                console.warn('Failed to fetch thumbnail', e);
-              }
-            }
-
-            await this.sock.sendMessage(jid, {
-              text: content,
-              contextInfo: {
-                externalAdReply: {
-                  title: previewData.title || 'Link Preview',
-                  body: previewData.description || matchedUrl,
-                  thumbnail: thumbnail,
-                  sourceUrl: matchedUrl,
-                  mediaType: 1, // 1 = Thumbnail from sourceUrl, 2 = Thumbnail from image file
-                  renderLargerThumbnail: true
-                }
-              }
-            });
-          } catch (err) {
-            console.error('Link preview failed, sending text only', err);
-            await this.sock.sendMessage(jid, { text: content });
-          }
+          await this.sock.sendMessage(jid, { text: content });
+          // Simplified link preview handling for stability
         } else {
           await this.sock.sendMessage(jid, { text: content });
         }
       } else {
-        // Handle media (image, audio, video, document)
-        // Extract base64 part safely (handles any mimetype prefix)
         const base64Part = content.includes(',') ? content.split(',')[1] : content;
-
-        if (!base64Part) {
-          throw new Error("Invalid media content: Base64 data missing");
-        }
+        if (!base64Part) throw new Error("Invalid media content: Base64 data missing");
 
         const buffer = Buffer.from(base64Part, 'base64');
-        console.log(`[API] Created buffer for ${type}, size: ${buffer.length} bytes`);
 
         if (type === 'image') {
           await this.sock.sendMessage(jid, { image: buffer, caption: caption });
@@ -177,31 +192,36 @@ export class WhatsAppEngine {
       }
       return { success: true, timestamp: Date.now() };
     } catch (error) {
-      console.error(`[API] فشل الإرسال:`, error);
+      console.error(`[API] Send failed:`, error);
       throw error;
     }
   }
+
   async logout() {
     try {
       console.log('[Engine] Logging out...');
       if (this.sock) {
-        await this.sock.logout(); // Try graceful logout
-        this.sock.end(undefined); // Close connection
+        await this.sock.logout();
+        this.sock.end(undefined);
         this.sock = null;
       }
     } catch (err) {
       console.error('[Engine] Error during logout:', err);
     } finally {
-      // Force cleanup auth folder
-      try {
-        await fs.rm(`./auth_${this.userId}/${this.sessionId}`, { recursive: true, force: true });
-        console.log(`[Engine] Auth session ${this.sessionId} cleared.`);
-        this.status = 'IDLE';
-      } catch (err) {
-        console.error('[Engine] Failed to delete auth folder:', err);
-      }
+      await this.cleanupData();
+      this.status = 'IDLE';
     }
   }
+
+  async cleanupData() {
+    try {
+      await AuthStateModel.deleteMany({ sessionId: this.sessionId });
+      console.log(`[Engine] Auth data for ${this.sessionId} cleared from DB.`);
+    } catch (e) {
+      console.error('[Engine] Failed to clear DB data', e);
+    }
+  }
+
   async validateNumber(phone: string): Promise<boolean> {
     if (this.status !== 'CONNECTED' || !this.sock) return false;
     const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
@@ -210,6 +230,7 @@ export class WhatsAppEngine {
       return result && result.length > 0 && result[0].exists;
     } catch (err) {
       console.error(`Failed to validate number ${phone}`, err);
+      // In case of timeout or error, assuming false or skipping validation might be safer
       return false;
     }
   }
