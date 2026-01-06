@@ -7,6 +7,7 @@ import Users from './src/pages/Users';
 import Dashboard from './src/pages/Dashboard';
 import Devices from './src/pages/Devices';
 import Campaigns from './src/pages/Campaigns';
+import Messages from './src/pages/Messages';
 import { Menu } from 'lucide-react';
 
 const App = () => {
@@ -24,6 +25,28 @@ const App = () => {
         auth: { token }
       });
       setSocket(newSocket);
+
+      newSocket.on('connect', () => {
+        console.log('Socket connected');
+        setStatus('connected');
+      });
+
+      newSocket.on('disconnect', () => {
+        console.log('Socket disconnected');
+        setStatus('disconnected');
+      });
+
+      newSocket.on('connect_error', (err) => {
+        console.error('Socket connection error:', err);
+        setStatus('error');
+        if (err.message === 'Authentication error') {
+          // Token expired or invalid
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          localStorage.removeItem('isLoggedIn');
+          setIsAuthenticated(false);
+        }
+      });
 
       newSocket.on('session-status', ({ status }: any) => {
         // Global status listener if needed, but pages handle their own specific session status usually
@@ -86,6 +109,7 @@ const App = () => {
         <Route element={<DashboardLayout />}>
           <Route path="/" element={<Dashboard socket={socket} />} />
           <Route path="/devices" element={<Devices socket={socket} />} />
+          <Route path="/messages" element={<Messages />} />
           <Route path="/campaigns" element={<Campaigns socket={socket} />} />
           <Route path="/users" element={<Users />} />
         </Route>

@@ -1,14 +1,19 @@
 
 /**
  * WhatsApp Engine (SaaS Core)
- * This engine is designed to work in a Node.js environment with Baileys and MongoDB.
+ * This engine is designed to work in a Node.js environment with Baileys and File Storage.
  */
 
-import { makeWASocket, DisconnectReason, BufferJSON, AuthenticationCreds, SignalDataTypeMap, initAuthCreds, AnyMessageContent } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, BufferJSON, AuthenticationCreds } from '@whiskeysockets/baileys';
 import P from 'pino';
 import fs from 'fs/promises';
-import { getLinkPreview } from 'link-preview-js';
-import { AuthStateModel } from '../models/AuthState.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { storage } from './storage';
+import { useMongoDBAuthState } from './mongoAuth';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export class WhatsAppEngine {
   private userId: string;
@@ -17,82 +22,13 @@ export class WhatsAppEngine {
   private sock: any = null;
 
   constructor(userId: string, sessionId: string) {
-    this.userId = userId; // kept for compatibility, but we rely on sessionId mostly
+    this.userId = userId;
     this.sessionId = sessionId;
   }
 
-  /**
-   * Custom MongoDB Auth State for Baileys
-   */
-  async useMongoDBAuthState() {
-    const saveState = async () => {
-      // We write whenever keys are updated. 
-      // In this implementation, 'keys.set' does the writing.
-    };
-
-    return {
-      state: {
-        creds: await this.loadCreds(),
-        keys: {
-          get: async (type: string, ids: string[]) => {
-            const data: { [key: string]: any } = {};
-            for (const id of ids) {
-              const doc = await AuthStateModel.findOne({ sessionId: this.sessionId, key: `${type}:${id}` });
-              if (doc && doc.value) {
-                try {
-                  data[id] = JSON.parse(JSON.stringify(doc.value), BufferJSON.reviver);
-                } catch (e) {
-                  console.error(`[DB] Failed to parse key ${type}:${id}`, e);
-                }
-              }
-            }
-            return data;
-          },
-          set: async (data: any) => {
-            const ops: any[] = [];
-            for (const type in data) {
-              for (const id in data[type]) {
-                const value = data[type][id];
-                const key = `${type}:${id}`;
-                if (value === null || value === undefined) {
-                  ops.push({ deleteOne: { filter: { sessionId: this.sessionId, key } } });
-                } else {
-                  const serialized = JSON.parse(JSON.stringify(value, BufferJSON.replacer));
-                  ops.push({
-                    updateOne: {
-                      filter: { sessionId: this.sessionId, key },
-                      update: { $set: { value: serialized } },
-                      upsert: true
-                    }
-                  });
-                }
-              }
-            }
-            if (ops.length > 0) {
-              await AuthStateModel.bulkWrite(ops);
-            }
-          }
-        }
-      },
-      saveCreds: async () => {
-        if (this.sock?.authState?.creds) {
-          const serialized = JSON.parse(JSON.stringify(this.sock.authState.creds, BufferJSON.replacer));
-          await AuthStateModel.updateOne(
-            { sessionId: this.sessionId, key: 'creds' },
-            { value: serialized },
-            { upsert: true }
-          );
-        }
-      }
-    };
-  }
-
-  async loadCreds(): Promise<AuthenticationCreds> {
-    const doc = await AuthStateModel.findOne({ sessionId: this.sessionId, key: 'creds' });
-    if (doc && doc.value) {
-      return JSON.parse(JSON.stringify(doc.value), BufferJSON.reviver);
-    }
-    return initAuthCreds();
+  // Auth path is no longer needed but we keep folder logic just in case or remove if safe
+  private getAuthPath() {
+    return path.join(__dirname, '../data/auth_info_baileys', this.sessionId);
   }
 
   /**
@@ -100,11 +36,11 @@ export class WhatsAppEngine {
    */
   async startSession(onQR: (qr: string) => void, onConnected: () => void) {
     this.status = 'QR';
-    console.log(`[Engine] Starting Baileys socket for session ${this.sessionId} (MongoDB Auth)...`);
+    console.log(`[Engine] Starting Baileys socket for session ${this.sessionId} (Mongo Auth)...`);
 
     try {
-      // Use Custom MongoDB Auth
-      const { state, saveCreds } = await this.useMongoDBAuthState();
+      // Use MongoDB Auth Adapter
+      const { state, saveCreds } = await useMongoDBAuthState(this.sessionId);
 
       // Create Socket
       this.sock = makeWASocket({
@@ -149,6 +85,142 @@ export class WhatsAppEngine {
 
       // Handle Creds Update
       this.sock.ev.on('creds.update', saveCreds);
+
+      // --- Contact Handling ---
+
+      // 1. Initial Contact Sync from WhatsApp (Phonebook)
+      this.sock.ev.on('contacts.upsert', async (contacts: any[]) => {
+        console.log(`[Engine] Received ${contacts.length} contacts (Phonebook).`);
+        if (contacts.length > 0) console.log('[Engine] Sample contact:', JSON.stringify(contacts[0]));
+
+        const validContacts = contacts
+          .filter(c => c.id.includes('@s.whatsapp.net') && !c.id.includes('@lid') && !c.id.includes('@broadcast'))
+          .map(c => ({
+            sessionId: this.sessionId,
+            id: c.id,
+            name: c.name || undefined, // Strict name only
+            notify: c.notify,
+            verifiedName: c.verifiedName
+          }));
+
+        if (validContacts.length > 0) {
+          await storage.saveItems('contacts', validContacts);
+          console.log(`[Engine] Saved ${validContacts.length} numbers from Phonebook.`);
+        }
+      });
+
+      // 2. Fallback: Parse Incoming Messages to extract sender number/name
+      this.sock.ev.on('messages.upsert', async ({ messages, type }: { messages: any[], type: string }) => {
+        if (type === 'notify' || type === 'append') {
+          const contactsToUpdate = [];
+
+          for (const msg of messages) {
+            if (msg.key.fromMe) continue;
+
+            const remoteJid = msg.key.remoteJid;
+            if (!remoteJid || remoteJid.includes('@lid') || remoteJid.includes('@broadcast') || !remoteJid.includes('@s.whatsapp.net')) continue;
+
+            const pushName = msg.pushName;
+
+            contactsToUpdate.push({
+              sessionId: this.sessionId,
+              id: remoteJid,
+              notify: pushName,
+              name: undefined, // Never overwrite name from a message upsert
+              hasMessaged: true
+            });
+          }
+
+          if (contactsToUpdate.length > 0) {
+            await storage.saveItems('contacts', contactsToUpdate);
+          }
+        }
+      });
+
+      // 3. conversation History (Chats) - REMOVED (Handled by messaging-history.set)
+      this.sock.ev.on('chats.upsert', async (chats: any[]) => {
+        // Helpful for incremental updates, but history sync covers initial.
+        // keeping it for real-time new conversation updates
+        const contactsToUpdate = chats
+          .filter(c => c.id.includes('@s.whatsapp.net') && !c.id.includes('@lid') && !c.id.includes('@broadcast'))
+          .map(c => ({
+            sessionId: this.sessionId,
+            id: c.id,
+            name: c.name || undefined,
+            hasMessaged: true
+          }));
+
+        if (contactsToUpdate.length > 0) {
+          await storage.saveItems('contacts', contactsToUpdate);
+        }
+      });
+
+      // 4. Initial History Sync (The most reliable source for past chats)
+      this.sock.ev.on('messaging-history.set', async (data: any) => {
+        const { chats, contacts, messages } = data;
+        const msgCount = messages?.length || 0;
+        console.log(`[Engine] Received History Sync: ${chats?.length || 0} chats, ${contacts?.length || 0} contacts, ${msgCount} messages.`);
+
+        // Map to deduplicate and merge updates for this batch
+        // Key: JID, Value: Partial<Contact>
+        const contactsMap = new Map<string, any>();
+
+        const upsertContact = (id: string, data: any) => {
+          if (!id.includes('@s.whatsapp.net') || id.includes('@lid')) return;
+          const existing = contactsMap.get(id) || { sessionId: this.sessionId, id };
+          // Merge logic: prefer new truthy values, but careful with 'name' vs 'notify'
+          contactsMap.set(id, { ...existing, ...data });
+        };
+
+        // 1. Process Contacts (Phonebook names & PushNames from direct contact sync)
+        if (contacts) {
+          contacts.forEach((c: any) => {
+            upsertContact(c.id, {
+              name: c.name || undefined, // Strict name only (Saved Name)
+              notify: c.notify, // Push Name (WhatsApp Name) if present
+              verifiedName: c.verifiedName
+            });
+          });
+        }
+
+        // 2. Process Chats (Conversations state)
+        if (chats) {
+          chats.forEach((c: any) => {
+            // For chats, we primarily want to establish 'hasMessaged'
+            upsertContact(c.id, {
+              // chat.name can be a name for groups/contacts if set manually or synced
+              ...(c.name ? { name: c.name } : {}),
+              hasMessaged: true
+            });
+          });
+        }
+
+        // 3. Process Messages (CRITICAL: Extract PushNames for unsaved contacts)
+        if (messages) {
+          messages.forEach((msg: any) => {
+            if (msg.pushName && !msg.key.fromMe) {
+              const isGroup = msg.key.remoteJid.endsWith('@g.us');
+              // For groups, sender is participant. For private, remoteJid is sender.
+              const sender = isGroup ? msg.key.participant : msg.key.remoteJid;
+
+              if (sender) {
+                upsertContact(sender, {
+                  notify: msg.pushName, // This solves "Missing WhatsApp Name"
+                  hasMessaged: true
+                });
+              }
+            }
+          });
+        }
+
+        const contactsToSave = Array.from(contactsMap.values());
+
+        if (contactsToSave.length > 0) {
+          await storage.saveItems('contacts', contactsToSave);
+          console.log(`[Engine] Synced ${contactsToSave.length} unique contacts from history (with deep message scanning).`);
+        }
+      });
+
 
     } catch (error) {
       console.error('[Engine] Failed to start session:', error);
@@ -215,10 +287,14 @@ export class WhatsAppEngine {
 
   async cleanupData() {
     try {
-      await AuthStateModel.deleteMany({ sessionId: this.sessionId });
-      console.log(`[Engine] Auth data for ${this.sessionId} cleared from DB.`);
+      const authPath = this.getAuthPath();
+      // try removing directory recursively
+      await fs.rm(authPath, { recursive: true, force: true });
+      console.log(`[Engine] Auth data for ${this.sessionId} cleared.`);
+
+      // Optional: Clear contacts? No, user might want to keep data.
     } catch (e) {
-      console.error('[Engine] Failed to clear DB data', e);
+      console.error('[Engine] Failed to clear data', e);
     }
   }
 
@@ -230,7 +306,6 @@ export class WhatsAppEngine {
       return result && result.length > 0 && result[0].exists;
     } catch (err) {
       console.error(`Failed to validate number ${phone}`, err);
-      // In case of timeout or error, assuming false or skipping validation might be safer
       return false;
     }
   }

@@ -1,12 +1,13 @@
+import './env-loader';
 import express from 'express';
 import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
-import mongoose from 'mongoose';
-import { WhatsAppEngine } from './services/whatsappEngine.js';
-import { SessionModel } from './models/Session.js';
-import { UserModel } from './models/User.js';
+import { WhatsAppEngine } from './services/whatsappEngine';
+import { storage } from './services/storage';
+import { IUser } from './models/User';
+import { ISession } from './models/Session';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -28,9 +29,8 @@ const io = new Server(httpServer, {
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-it';
-const MONGO_URI = process.env.MONGO_URI || "";
 
-// Session Management (InMemory Map for active engines, DB for persistence)
+// Session Management (InMemory Map for active engines, Persistence via FileStorage)
 interface ActiveSession {
     id: string;
     name: string;
@@ -40,29 +40,20 @@ interface ActiveSession {
 
 const sessions = new Map<string, ActiveSession>();
 
-// Helper: Load sessions from MongoDB
+// Helper: Load sessions from storage
 const loadSessions = async () => {
     try {
-        if (!MONGO_URI) {
-            console.error('MONGO_URI is missing in .env.local');
-            return false;
-        }
+        console.log('Loading sessions from storage...');
+        const storedSessions: ISession[] = await storage.getItems('sessions');
 
-        console.log('Connecting to MongoDB...');
-        await mongoose.connect(MONGO_URI);
-        console.log('Connected to MongoDB.');
-
-        const storedSessions = await SessionModel.find();
         for (const s of storedSessions) {
-            // Check if session has a valid userId, otherwise skip or assign to default if needed
-            // For SaaS, we ignore orphaned sessions or delete them
             if (!s.userId) continue;
 
-            const engine = new WhatsAppEngine(s.userId.toString(), s.id);
+            const engine = new WhatsAppEngine(s.userId, s.id);
             sessions.set(s.id, {
                 id: s.id,
                 name: s.name,
-                userId: s.userId.toString(),
+                userId: s.userId,
                 engine
             });
 
@@ -74,15 +65,13 @@ const loadSessions = async () => {
                 ).catch(err => console.error(`[Startup] Failed to resume ${s.id}`, err));
             }
         }
-        console.log(`Loaded ${sessions.size} active sessions from DB.`);
+        console.log(`Loaded ${sessions.size} active sessions.`);
         return true;
     } catch (error) {
-        console.error('Failed to load sessions or connect to DB:', error);
+        console.error('Failed to load sessions:', error);
         return false;
     }
 };
-
-
 
 // Stats (Mock/Simple In-Memory)
 let stats = {
@@ -105,7 +94,7 @@ app.get('/stats', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-    res.send('WhatsApp Backend Server is running and reachable (MongoDB Enabled)!');
+    res.send('WhatsApp Backend Server is running (File Storage API)!');
 });
 
 app.use(express.json({ limit: '50mb' }));
@@ -147,11 +136,11 @@ const requireAdmin = (req: any, res: any, next: any) => {
 // Seed Admin User
 const seedAdmin = async () => {
     try {
-        const adminExists = await UserModel.findOne({ role: 'admin' });
-        if (!adminExists) {
+        const adminUser = await storage.getItem('users', { role: 'admin' });
+        if (!adminUser) {
             console.log('Seeding default admin...');
             const hashedPassword = await bcrypt.hash('admin123', 10);
-            await UserModel.create({
+            await storage.saveItem('users', {
                 name: 'System Admin',
                 username: 'admin@admin.com',
                 password: hashedPassword,
@@ -160,14 +149,11 @@ const seedAdmin = async () => {
             });
             console.log('Default admin created: admin@admin.com / admin123');
         } else {
-            // Migration Fix: Ensure existing admin has a username and is active
-            if (!adminExists.username) {
-                console.log('Migrating Admin user to new schema...');
-                await UserModel.updateOne(
-                    { _id: adminExists._id },
-                    { $set: { username: 'admin@admin.com', isActive: true } }
-                );
-                console.log('Admin user migrated: username set to admin@admin.com');
+            if (adminUser.username !== 'admin@admin.com') {
+                adminUser.username = 'admin@admin.com';
+                adminUser.isActive = true;
+                await storage.saveItem('users', adminUser);
+                console.log('Admin updated');
             }
         }
     } catch (error) {
@@ -179,10 +165,9 @@ const PORT = 3050;
 
 // Initialize & Start Server
 const startServer = async () => {
-    const dbConnected = await loadSessions();
-    if (dbConnected) {
-        await seedAdmin();
-    }
+    await storage.init(); // Ensure data dir exists
+    await loadSessions();
+    await seedAdmin();
 
     httpServer.listen(PORT, () => {
         console.log(`Backend Server running on port ${PORT}`);
@@ -199,11 +184,17 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any,
         const { name, username, password } = req.body;
         if (!name || !username || !password) return res.status(400).json({ error: 'Missing fields' });
 
-        const existingUser = await UserModel.findOne({ username });
+        const existingUser = await storage.getItem('users', { username });
         if (existingUser) return res.status(400).json({ error: 'Username already exists' });
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await UserModel.create({ name, username, password: hashedPassword, role: 'user', isActive: true });
+        const user = await storage.saveItem('users', {
+            name,
+            username,
+            password: hashedPassword,
+            role: 'user',
+            isActive: true
+        });
 
         res.json({ message: 'User created successfully', user: { id: user._id, name: user.name, username: user.username } });
     } catch (error) {
@@ -214,13 +205,16 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any,
 
 app.post('/api/auth/login', async (req, res) => {
     try {
-        const { username, password } = req.body; // Changed email to username
-        const user = await UserModel.findOne({ username });
+        const { username, password } = req.body;
+
+        if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+
+        const user: IUser = await storage.getItem('users', { username });
         if (!user) return res.status(400).json({ error: 'User not found' });
 
         if (user.isActive === false) return res.status(403).json({ error: 'Account is suspended' });
 
-        const validPassword = await bcrypt.compare(password, user.password);
+        const validPassword = await bcrypt.compare(password, user.password || '');
         if (!validPassword) return res.status(400).json({ error: 'Invalid password' });
 
         const token = jwt.sign({ userId: user._id, username: user.username, role: user.role }, JWT_SECRET);
@@ -232,15 +226,20 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.get('/api/me', authenticateToken, async (req: any, res) => {
-    const user = await UserModel.findById(req.user.userId).select('-password');
+    const user = await storage.getItem('users', { _id: req.user.userId });
+    if (user) delete user.password;
     res.json(user);
 });
 
 // List Users (Admin Only)
 app.get('/api/users', authenticateToken, requireAdmin, async (req: any, res) => {
     try {
-        const users = await UserModel.find({}, '-password').sort({ createdAt: -1 });
-        res.json(users);
+        const users = await storage.getItems('users');
+        const safeUsers = users.map((u: any) => {
+            const { password, ...rest } = u;
+            return rest;
+        });
+        res.json(safeUsers.sort((a: any, b: any) => (b.createdAt || '').localeCompare(a.createdAt || '')));
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch users' });
     }
@@ -253,19 +252,20 @@ app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res)
         const { name, username, password, isActive } = req.body;
 
         // Prevent suspending Admin
-        const targetUser = await UserModel.findById(id);
+        const targetUser = await storage.getItem('users', { _id: id });
         if (!targetUser) return res.status(404).json({ error: 'User not found' });
 
         if (targetUser.role === 'admin' && isActive === false) {
             return res.status(403).json({ error: 'Cannot suspend an admin account' });
         }
 
-        const updateData: any = { name, username, isActive };
+        const updateData: any = { _id: id, name, username, isActive };
         if (password && password.trim() !== '') {
             updateData.password = await bcrypt.hash(password, 10);
         }
 
-        const updatedUser = await UserModel.findByIdAndUpdate(id, updateData, { new: true }).select('-password');
+        const updatedUser = await storage.saveItem('users', updateData);
+        delete updatedUser.password;
         res.json(updatedUser);
     } catch (error) {
         res.status(500).json({ error: 'Failed to update user' });
@@ -278,16 +278,16 @@ app.delete('/api/users/:id', authenticateToken, requireAdmin, async (req: any, r
         const { id } = req.params;
 
         // Check if target is admin
-        const targetUser = await UserModel.findById(id);
+        const targetUser = await storage.getItem('users', { _id: id });
         if (!targetUser) return res.status(404).json({ error: 'User not found' });
 
         if (targetUser.role === 'admin') {
             return res.status(403).json({ error: 'Cannot delete an admin account' });
         }
 
-        await UserModel.findByIdAndDelete(id);
+        await storage.deleteItem('users', { _id: id });
         // Also delete their sessions
-        await SessionModel.deleteMany({ userId: id });
+        await storage.deleteItem('sessions', { userId: id });
         res.json({ message: 'User deleted' });
     } catch (error) {
         res.status(500).json({ error: 'Failed to delete user' });
@@ -298,14 +298,14 @@ app.delete('/api/users/:id', authenticateToken, requireAdmin, async (req: any, r
 app.post('/api/auth/change-password', authenticateToken, async (req: any, res) => {
     try {
         const { oldPassword, newPassword } = req.body;
-        const user = await UserModel.findById(req.user.userId);
+        const user = await storage.getItem('users', { _id: req.user.userId });
         if (!user) return res.status(404).json({ error: 'User not found' });
 
-        const isMatch = await bcrypt.compare(oldPassword, user.password);
+        const isMatch = await bcrypt.compare(oldPassword, user.password || '');
         if (!isMatch) return res.status(400).json({ error: 'Incorrect old password' });
 
         user.password = await bcrypt.hash(newPassword, 10);
-        await user.save();
+        await storage.saveItem('users', user);
 
         res.json({ message: 'Password updated successfully' });
     } catch (error) {
@@ -382,6 +382,45 @@ app.post('/api/sessions/:sessionId/send', authenticateToken, async (req: any, re
     }
 });
 
+// Get Contacts (Secured)
+app.get('/api/sessions/:sessionId/contacts', authenticateToken, async (req: any, res) => {
+    const { sessionId } = req.params;
+
+    const session = sessions.get(sessionId);
+    // Isolation Check
+    if (!session || session.userId !== req.user.userId) {
+        return res.status(404).json({ error: 'Session not found or access denied' });
+    }
+
+    try {
+        const contacts = await storage.getContacts(sessionId);
+        res.json(contacts);
+    } catch (error) {
+        console.error('Failed to fetch contacts:', error);
+        res.status(500).json({ error: 'Failed to fetch contacts' });
+    }
+});
+
+// Get Messages (Secured)
+app.get('/api/sessions/:sessionId/messages', authenticateToken, async (req: any, res) => {
+    const { sessionId } = req.params;
+    const { jid, limit = 50 } = req.query;
+
+    const session = sessions.get(sessionId);
+    // Isolation Check
+    if (!session || session.userId !== req.user.userId) {
+        return res.status(404).json({ error: 'Session not found or access denied' });
+    }
+
+    try {
+        const messages = await storage.getMessages(sessionId, Number(limit), jid as string);
+        res.json(messages);
+    } catch (error) {
+        console.error('Failed to fetch messages:', error);
+        res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+});
+
 // --- Socket.IO with Auth ---
 
 io.use((socket, next) => {
@@ -422,11 +461,11 @@ io.on('connection', (socket) => {
             const engine = new WhatsAppEngine(userId, sessionId); // Use userId for auth storage separation
             sessions.set(sessionId, { id: sessionId, name, userId, engine });
 
-            // Persist to MongoDB with userId
+            // Persist to Storage with userId
             try {
-                await SessionModel.create({ id: sessionId, name, userId, status: 'IDLE' });
+                await storage.saveItem('sessions', { id: sessionId, name, userId, status: 'IDLE' });
             } catch (saveError) {
-                console.error('Failed to save session to DB:', saveError);
+                console.error('Failed to save session to storage:', saveError);
             }
 
             socket.emit('session-created', { id: sessionId, name, status: 'IDLE' });
@@ -453,9 +492,9 @@ io.on('connection', (socket) => {
             sessions.delete(sessionId);
 
             try {
-                await SessionModel.deleteOne({ id: sessionId, userId });
+                await storage.deleteItem('sessions', { id: sessionId, userId });
             } catch (e) {
-                console.error('Failed to delete session from DB:', e);
+                console.error('Failed to delete session from storage:', e);
             }
             io.to(`user:${userId}`).emit('sessions-updated');
         }
@@ -473,13 +512,20 @@ io.on('connection', (socket) => {
                 (qrCodeDataUrl) => {
                     socket.emit('session-qr', { sessionId, qr: qrCodeDataUrl });
                     socket.emit('session-status', { sessionId, status: 'qr' });
-                    SessionModel.updateOne({ id: sessionId }, { status: 'QR' }).exec();
+                    // Update status in storage
+                    storage.getItem('sessions', { id: sessionId }).then(s => {
+                        if (s) { s.status = 'QR'; storage.saveItem('sessions', s); }
+                    });
+
                     io.to(`user:${userId}`).emit('sessions-updated');
                 },
                 () => {
                     console.log(`Session ${sessionId} connected!`);
                     socket.emit('session-status', { sessionId, status: 'connected' });
-                    SessionModel.updateOne({ id: sessionId }, { status: 'CONNECTED' }).exec();
+                    // Update status in storage
+                    storage.getItem('sessions', { id: sessionId }).then(s => {
+                        if (s) { s.status = 'CONNECTED'; storage.saveItem('sessions', s); }
+                    });
                     io.to(`user:${userId}`).emit('sessions-updated');
                 }
             );
@@ -600,17 +646,11 @@ io.on('connection', (socket) => {
         if (session && session.userId === userId) {
             await session.engine.logout();
             socket.emit('session-status', { sessionId, status: 'disconnected' });
-            SessionModel.updateOne({ id: sessionId }, { status: 'DISCONNECTED' }).exec();
+            // Update status in storage
+            storage.getItem('sessions', { id: sessionId }).then(s => {
+                if (s) { s.status = 'DISCONNECTED'; storage.saveItem('sessions', s); }
+            });
             io.to(`user:${userId}`).emit('sessions-updated');
         }
     });
 });
-
-
-// Serve Static Frontend (Production) - DISABLED (Vercel hosts frontend)
-// app.use(express.static(path.join(__dirname, 'dist')));
-// app.get('*', (req, res) => {
-//    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-// });
-
-

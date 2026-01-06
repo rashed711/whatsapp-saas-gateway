@@ -1,12 +1,10 @@
-import mongoose from 'mongoose';
-
-const userSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    username: { type: String, required: true, unique: true },
-    password: { type: String, required: true }, // Hashed
-    isActive: { type: Boolean, default: true },
-    createdAt: { type: Date, default: Date.now },
-    role: { type: String, enum: ['user', 'admin'], default: 'user' }
-});
-
-export const UserModel = mongoose.model('User', userSchema);
+export interface IUser {
+    _id?: string;
+    name: string;
+    username: string; // Used as email/login id
+    password?: string;
+    role: 'admin' | 'user';
+    isActive?: boolean;
+    createdAt?: string;
+    updatedAt?: string;
+}

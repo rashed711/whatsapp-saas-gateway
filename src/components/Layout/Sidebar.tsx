@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Smartphone, Send, Key, LogOut, X, Users } from 'lucide-react';
+import { LayoutDashboard, Smartphone, Send, Key, LogOut, X, Users, MessageSquare } from 'lucide-react';
 
 interface SidebarProps {
     onLogout: () => void;
@@ -15,6 +15,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose }) => {
     const links = [
         { to: '/', icon: <LayoutDashboard size={20} />, label: 'لوحة التحكم' },
         { to: '/devices', icon: <Smartphone size={20} />, label: 'الأجهزة المتصلة' },
+        { to: '/messages', icon: <MessageSquare size={20} />, label: 'الرسائل الواردة' },
         { to: '/campaigns', icon: <Send size={20} />, label: 'إرسال الحملات' },
     ];
 

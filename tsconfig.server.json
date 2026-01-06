@@ -16,6 +16,11 @@
     },
     "include": [
         "server.ts",
-        "services/**/*"
-    ]
+        "services/**/*",
+        "models/**/*"
+    ],
+    "ts-node": {
+        "esm": true,
+        "experimentalSpecifierResolution": "node"
+    }
 }

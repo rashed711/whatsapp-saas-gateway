@@ -80,8 +80,24 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
 
     const handleCreateSession = () => {
         if (!newSessionName.trim() || !socket) return;
+
+        if (!socket.connected) {
+            alert('لا يوجد اتصال بالسيرفر. تأكد من تشغيل السيرفر وحاول مرة أخرى.');
+            return;
+        }
+
         setLoading(true);
+
+        // Timeout handler to prevent hanging
+        const timeoutId = setTimeout(() => {
+            if (loading) {
+                setLoading(false);
+                alert('استغرق الطلب وقتًا طويلاً. يرجى التحقق من الاتصال.');
+            }
+        }, 10000);
+
         socket.emit('create-session', { name: newSessionName }, (response: any) => {
+            clearTimeout(timeoutId);
             setLoading(false);
 
             if (response && response.error) {

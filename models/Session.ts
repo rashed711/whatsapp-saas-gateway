@@ -1,11 +1,9 @@
-import mongoose from 'mongoose';
-
-const sessionSchema = new mongoose.Schema({
-  id: { type: String, required: true, unique: true },
-  name: { type: String, required: true },
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  status: { type: String, default: 'IDLE' }, // IDLE, QR, CONNECTED, PAUSED
-  createdAt: { type: Date, default: Date.now }
-});
-
-export const SessionModel = mongoose.model('Session', sessionSchema);
+export interface ISession {
+  _id?: string;
+  id: string; // The session ID string (e.g. sess_123)
+  name: string;
+  userId: string;
+  status: 'IDLE' | 'QR' | 'CONNECTED' | 'DISCONNECTED';
+  createdAt?: string;
+  updatedAt?: string;
+}

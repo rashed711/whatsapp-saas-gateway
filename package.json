@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "ts-node --esm --project tsconfig.server.json server.ts",
+    "server": "npx -y tsx server.ts",
     "start": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview",
