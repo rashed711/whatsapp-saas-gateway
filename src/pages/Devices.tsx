@@ -28,6 +28,13 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
         setTimeout(() => setCopied(false), 2000);
     };
 
+    const [tokenCopied, setTokenCopied] = useState(false);
+    const handleCopyToken = (text: string) => {
+        navigator.clipboard.writeText(text);
+        setTokenCopied(true);
+        setTimeout(() => setTokenCopied(false), 2000);
+    };
+
     useEffect(() => {
         if (!socket) return;
 
@@ -276,6 +283,24 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                         {copied ? <Check size={18} /> : <Copy size={18} />}
                                     </button>
                                 </div>
+                            </div>
+
+                            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Authorization Token (Bearer)</label>
+                                <div className="flex items-center gap-2">
+                                    <code className="flex-1 bg-white p-3 rounded-lg border border-slate-200 font-mono text-sm text-slate-700 break-all line-clamp-2 hover:line-clamp-none cursor-pointer" title="Click to see full token">
+                                        {localStorage.getItem('token') || 'Token not found'}
+                                    </code>
+                                    <button
+                                        onClick={() => handleCopyToken(localStorage.getItem('token') || '')}
+                                        className="p-3 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-emerald-500 hover:border-emerald-500 transition-colors"
+                                    >
+                                        {tokenCopied ? <Check size={18} /> : <Copy size={18} />}
+                                    </button>
+                                </div>
+                                <p className="text-xs text-slate-400 mt-2">
+                                    Required Header: <code className="bg-slate-100 px-1 py-0.5 rounded text-amber-600">Authorization: Bearer YOUR_TOKEN</code>
+                                </p>
                             </div>
 
                             <div className="space-y-4">
