@@ -213,7 +213,7 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any,
             console.error('Failed to write error log:', fsErr);
         }
 
-        res.status(500).json({ error: 'Internal Server Error', details: error.message });
+        res.status(500).json({ error: `Internal Server Error: ${error.message}`, details: error.message });
     }
 });
 
