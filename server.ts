@@ -180,6 +180,8 @@ startServer();
 
 // Register (Now Protected - Admin Only)
 app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any, res: any) => {
+    console.log('--> REGISTER REQUEST RECEIVED');
+    console.log('Body:', JSON.stringify(req.body, null, 2));
     try {
         const { name, username, password } = req.body;
         if (!name || !username || !password) return res.status(400).json({ error: 'Missing fields' });
@@ -196,14 +198,20 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any,
             isActive: true
         });
 
+        console.log('--> USER CREATED SUCCESSFULLY:', user._id);
         res.json({ message: 'User created successfully', user: { id: user._id, name: user.name, username: user.username } });
     } catch (error: any) {
-        console.error('Register error', error);
+        console.error('xx REGISTER ERROR THROWN xx');
+        console.error(error);
 
-        // Debugging: Write error to file
-        import('fs').then(fs => {
+        // Debugging: Write error to file (Sync)
+        try {
+            const fs = await import('fs');
             fs.appendFileSync('server_error.log', `[${new Date().toISOString()}] Register Error: ${error.message}\nStack: ${error.stack}\n\n`);
-        });
+            console.log('--> Error written to server_error.log');
+        } catch (fsErr) {
+            console.error('Failed to write error log:', fsErr);
+        }
 
         res.status(500).json({ error: 'Internal Server Error', details: error.message });
     }
