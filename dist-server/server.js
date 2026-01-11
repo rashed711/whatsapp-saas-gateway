@@ -1,3 +1,4 @@
+import './env-loader.js';
 import express from 'express';
 import { createServer } from 'http';
 import path from 'path';
@@ -166,12 +167,18 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req, res)
     }
     catch (error) {
         console.error('Register error', error);
-        res.status(500).json({ error: 'Internal Server Error' });
+        // Debugging: Write error to file
+        import('fs').then(fs => {
+            fs.appendFileSync('server_error.log', `[${new Date().toISOString()}] Register Error: ${error.message}\nStack: ${error.stack}\n\n`);
+        });
+        res.status(500).json({ error: 'Internal Server Error', details: error.message });
     }
 });
 app.post('/api/auth/login', async (req, res) => {
     try {
         const { username, password } = req.body;
+        if (!username || !password)
+            return res.status(400).json({ error: 'Username and password required' });
         const user = await storage.getItem('users', { username });
         if (!user)
             return res.status(400).json({ error: 'User not found' });

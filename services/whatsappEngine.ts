@@ -9,8 +9,8 @@ import P from 'pino';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { storage } from './storage';
-import { useMongoDBAuthState } from './mongoAuth';
+import { storage } from './storage.js';
+import { useMongoDBAuthState } from './mongoAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

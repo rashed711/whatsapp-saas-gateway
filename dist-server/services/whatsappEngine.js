@@ -2,12 +2,13 @@
  * WhatsApp Engine (SaaS Core)
  * This engine is designed to work in a Node.js environment with Baileys and File Storage.
  */
-import { makeWASocket, DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason } from '@whiskeysockets/baileys';
 import P from 'pino';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { storage } from './storage.js';
+import { useMongoDBAuthState } from './mongoAuth.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export class WhatsAppEngine {
@@ -19,6 +20,7 @@ export class WhatsAppEngine {
         this.userId = userId;
         this.sessionId = sessionId;
     }
+    // Auth path is no longer needed but we keep folder logic just in case or remove if safe
     getAuthPath() {
         return path.join(__dirname, '../data/auth_info_baileys', this.sessionId);
     }
@@ -27,12 +29,10 @@ export class WhatsAppEngine {
      */
     async startSession(onQR, onConnected) {
         this.status = 'QR';
-        console.log(`[Engine] Starting Baileys socket for session ${this.sessionId} (File Auth)...`);
+        console.log(`[Engine] Starting Baileys socket for session ${this.sessionId} (Mongo Auth)...`);
         try {
-            const authPath = this.getAuthPath();
-            // Ensure directory exists
-            await fs.mkdir(authPath, { recursive: true });
-            const { state, saveCreds } = await useMultiFileAuthState(authPath);
+            // Use MongoDB Auth Adapter
+            const { state, saveCreds } = await useMongoDBAuthState(this.sessionId);
             // Create Socket
             this.sock = makeWASocket({
                 auth: state,
@@ -73,48 +73,121 @@ export class WhatsAppEngine {
             // Handle Creds Update
             this.sock.ev.on('creds.update', saveCreds);
             // --- Contact Handling ---
-            // 1. Initial Contact Sync from WhatsApp (when connecting new device)
+            // 1. Initial Contact Sync from WhatsApp (Phonebook)
             this.sock.ev.on('contacts.upsert', async (contacts) => {
-                console.log(`[Engine] Received ${contacts.length} contacts.`);
+                console.log(`[Engine] Received ${contacts.length} contacts (Phonebook).`);
+                if (contacts.length > 0)
+                    console.log('[Engine] Sample contact:', JSON.stringify(contacts[0]));
                 const validContacts = contacts
-                    .filter(c => !c.id.includes('@lid') && !c.id.includes('@broadcast') && c.id.includes('@s.whatsapp.net'))
+                    .filter(c => c.id.includes('@s.whatsapp.net') && !c.id.includes('@lid') && !c.id.includes('@broadcast'))
                     .map(c => ({
                     sessionId: this.sessionId,
                     id: c.id,
-                    name: c.name || c.notify, // 'name' is from phonebook, 'notify' is pushname
+                    name: c.name || undefined, // Strict name only
                     notify: c.notify,
                     verifiedName: c.verifiedName
                 }));
                 if (validContacts.length > 0) {
                     await storage.saveItems('contacts', validContacts);
-                    console.log(`[Engine] Saved ${validContacts.length} numbers.`);
+                    console.log(`[Engine] Saved ${validContacts.length} numbers from Phonebook.`);
                 }
             });
             // 2. Fallback: Parse Incoming Messages to extract sender number/name
             this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
-                // We look at 'notify' (new) and 'append' (history) messages
                 if (type === 'notify' || type === 'append') {
                     const contactsToUpdate = [];
                     for (const msg of messages) {
                         if (msg.key.fromMe)
-                            continue; // Skip own messages for contact list purposes if desired, or keep to know I messaged them
+                            continue;
                         const remoteJid = msg.key.remoteJid;
-                        // Basic Filtering
                         if (!remoteJid || remoteJid.includes('@lid') || remoteJid.includes('@broadcast') || !remoteJid.includes('@s.whatsapp.net'))
                             continue;
                         const pushName = msg.pushName;
-                        // Push to list
                         contactsToUpdate.push({
                             sessionId: this.sessionId,
                             id: remoteJid,
-                            name: pushName, // We treat pushName as a potential name if none empty
                             notify: pushName,
+                            name: undefined, // Never overwrite name from a message upsert
                             hasMessaged: true
                         });
                     }
                     if (contactsToUpdate.length > 0) {
                         await storage.saveItems('contacts', contactsToUpdate);
                     }
+                }
+            });
+            // 3. conversation History (Chats) - REMOVED (Handled by messaging-history.set)
+            this.sock.ev.on('chats.upsert', async (chats) => {
+                // Helpful for incremental updates, but history sync covers initial.
+                // keeping it for real-time new conversation updates
+                const contactsToUpdate = chats
+                    .filter(c => c.id.includes('@s.whatsapp.net') && !c.id.includes('@lid') && !c.id.includes('@broadcast'))
+                    .map(c => ({
+                    sessionId: this.sessionId,
+                    id: c.id,
+                    name: c.name || undefined,
+                    hasMessaged: true
+                }));
+                if (contactsToUpdate.length > 0) {
+                    await storage.saveItems('contacts', contactsToUpdate);
+                }
+            });
+            // 4. Initial History Sync (The most reliable source for past chats)
+            this.sock.ev.on('messaging-history.set', async (data) => {
+                const { chats, contacts, messages } = data;
+                const msgCount = messages?.length || 0;
+                console.log(`[Engine] Received History Sync: ${chats?.length || 0} chats, ${contacts?.length || 0} contacts, ${msgCount} messages.`);
+                // Map to deduplicate and merge updates for this batch
+                // Key: JID, Value: Partial<Contact>
+                const contactsMap = new Map();
+                const upsertContact = (id, data) => {
+                    if (!id.includes('@s.whatsapp.net') || id.includes('@lid'))
+                        return;
+                    const existing = contactsMap.get(id) || { sessionId: this.sessionId, id };
+                    // Merge logic: prefer new truthy values, but careful with 'name' vs 'notify'
+                    contactsMap.set(id, { ...existing, ...data });
+                };
+                // 1. Process Contacts (Phonebook names & PushNames from direct contact sync)
+                if (contacts) {
+                    contacts.forEach((c) => {
+                        upsertContact(c.id, {
+                            name: c.name || undefined, // Strict name only (Saved Name)
+                            notify: c.notify, // Push Name (WhatsApp Name) if present
+                            verifiedName: c.verifiedName
+                        });
+                    });
+                }
+                // 2. Process Chats (Conversations state)
+                if (chats) {
+                    chats.forEach((c) => {
+                        // For chats, we primarily want to establish 'hasMessaged'
+                        upsertContact(c.id, {
+                            // chat.name can be a name for groups/contacts if set manually or synced
+                            ...(c.name ? { name: c.name } : {}),
+                            hasMessaged: true
+                        });
+                    });
+                }
+                // 3. Process Messages (CRITICAL: Extract PushNames for unsaved contacts)
+                if (messages) {
+                    messages.forEach((msg) => {
+                        if (msg.pushName && !msg.key.fromMe) {
+                            const isGroup = msg.key.remoteJid.endsWith('@g.us');
+                            // For groups, sender is participant. For private, remoteJid is sender.
+                            const sender = isGroup ? msg.key.participant : msg.key.remoteJid;
+                            if (sender) {
+                                upsertContact(sender, {
+                                    notify: msg.pushName, // This solves "Missing WhatsApp Name"
+                                    hasMessaged: true
+                                });
+                            }
+                        }
+                    });
+                }
+                const contactsToSave = Array.from(contactsMap.values());
+                if (contactsToSave.length > 0) {
+                    await storage.saveItems('contacts', contactsToSave);
+                    console.log(`[Engine] Synced ${contactsToSave.length} unique contacts from history (with deep message scanning).`);
                 }
             });
         }

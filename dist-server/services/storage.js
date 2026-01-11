@@ -1,140 +1,134 @@
-import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, '../data');
-class FileStorage {
+import { connectDB } from './db.js';
+import { User, Session, Contact, Message } from './models/index.js';
+class MongoStorage {
     constructor() {
         this.init();
     }
     async init() {
-        try {
-            await fs.mkdir(DATA_DIR, { recursive: true });
-        }
-        catch (error) {
-            console.error('Failed to create data directory:', error);
+        await connectDB();
+    }
+    getModel(collection) {
+        switch (collection) {
+            case 'users': return User;
+            case 'sessions': return Session;
+            case 'contacts': return Contact;
+            case 'messages': return Message;
+            default: throw new Error(`Unknown collection: ${collection}`);
         }
     }
-    getFilePath(collection) {
-        return path.join(DATA_DIR, `${collection}.json`);
-    }
-    async readCollection(collection) {
-        try {
-            const data = await fs.readFile(this.getFilePath(collection), 'utf-8');
-            return JSON.parse(data);
-        }
-        catch (error) {
-            return [];
-        }
-    }
-    async writeCollection(collection, data) {
-        await fs.writeFile(this.getFilePath(collection), JSON.stringify(data, null, 2));
+    // Convert internal _id to string if needed, or handle mapping
+    normalizeItem(item) {
+        if (!item)
+            return null;
+        const obj = item.toObject ? item.toObject() : item;
+        // Ensure _id is available as string if needed, but our app mostly uses custom 'id' for contacts/sessions
+        // User model uses _id.
+        if (obj._id)
+            obj._id = obj._id.toString();
+        // Remove __v
+        delete obj.__v;
+        return obj;
     }
     async getItems(collection, query = {}) {
-        const items = await this.readCollection(collection);
-        if (Object.keys(query).length === 0)
-            return items;
-        return items.filter(item => {
-            for (const key in query) {
-                if (item[key] !== query[key])
-                    return false;
-            }
-            return true;
-        });
+        const Model = this.getModel(collection);
+        const items = await Model.find(query).sort({ createdAt: -1 });
+        return items.map(this.normalizeItem);
     }
     async getItem(collection, query) {
-        const items = await this.getItems(collection, query);
-        return items.length > 0 ? items[0] : null;
+        const Model = this.getModel(collection);
+        const item = await Model.findOne(query);
+        return this.normalizeItem(item);
     }
     async saveItem(collection, item) {
-        const items = await this.readCollection(collection);
-        if (!item._id) {
-            item._id = Math.random().toString(36).substr(2, 9);
-            item.createdAt = new Date().toISOString();
+        const Model = this.getModel(collection);
+        let filter = {};
+        if (item._id) {
+            filter._id = item._id;
         }
-        item.updatedAt = new Date().toISOString();
-        const index = items.findIndex(i => i._id === item._id);
-        if (index >= 0) {
-            items[index] = { ...items[index], ...item };
+        else if (collection === 'contacts' && item.sessionId && item.id) {
+            filter = { sessionId: item.sessionId, id: item.id };
+        }
+        else if (collection === 'sessions' && item.id) {
+            filter = { id: item.id };
+        }
+        else if (collection === 'users' && item.username) {
+            filter = { username: item.username };
         }
         else {
-            items.push(item);
+            // New item without ID, just create
+            const newItem = await Model.create(item);
+            return this.normalizeItem(newItem);
         }
-        await this.writeCollection(collection, items);
-        return item;
+        // Upsert
+        const updated = await Model.findOneAndUpdate(filter, item, {
+            new: true,
+            upsert: true,
+            setDefaultsOnInsert: true
+        });
+        return this.normalizeItem(updated);
     }
     async saveItems(collection, newItems) {
         if (newItems.length === 0)
             return;
-        const items = await this.readCollection(collection);
-        const now = new Date().toISOString();
-        for (const item of newItems) {
-            if (!item._id) {
-                item._id = Math.random().toString(36).substr(2, 9);
-                item.createdAt = now;
-            }
-            item.updatedAt = now;
-            // Check existence based on specific criteria
-            let index = -1;
+        const Model = this.getModel(collection);
+        const operations = newItems.map(item => {
+            let filter = {};
+            // Determine unique filter based on collection logic
             if (collection === 'contacts') {
-                // For contacts, check by 'id' (whatsapp JID) and 'sessionId' to prevent dups
-                index = items.findIndex(i => i.id === item.id && i.sessionId === item.sessionId);
-                // Merge logic: Don't overwrite existing name if new one is empty
-                if (index >= 0) {
-                    const existing = items[index];
-                    item.name = item.name || existing.name;
-                    item.notify = item.notify || existing.notify;
-                    // Merge hasMessaged: if true in new or existing, keep it true
-                    item.hasMessaged = item.hasMessaged || existing.hasMessaged;
-                    // Keep original createdAt
-                    item.createdAt = existing.createdAt;
-                }
+                filter = { sessionId: item.sessionId, id: item.id };
             }
             else if (collection === 'messages') {
-                index = items.findIndex(i => i.id === item.id);
+                filter = { sessionId: item.sessionId, id: item.id };
+            }
+            else if (collection === 'sessions') {
+                filter = { id: item.id };
+            }
+            else if (item._id) {
+                filter = { _id: item._id };
             }
             else {
-                index = items.findIndex(i => i._id === item._id);
+                // If strictly new insert without unique key logic, rely on _id generation
+                return { insertOne: { document: item } };
             }
-            if (index >= 0) {
-                items[index] = { ...items[index], ...item };
-            }
-            else {
-                items.push(item);
-            }
+            // For contacts, we want to specific merge logic (preserve name if not present)
+            // But bulkWrite doesn't support "calculate then update" easily. 
+            // We'll trust Mongoose 'upsert' to merge fields provided in 'item'.
+            // WARNING: If 'item' contains only partial fields, findOneAndUpdate with $set is default.
+            // But we need to be careful not to unset fields.
+            // Our whatsappEngine sends full objects usually, or merged ones.
+            // The engine already did some merging. 
+            // However, the engine logic `...(c.name ? { name: c.name } : {})` means it might send objects WITHOUT name.
+            // Mongoose updateOne with $set will ONLY update provided fields. Perfect.
+            return {
+                updateOne: {
+                    filter: filter,
+                    update: { $set: item },
+                    upsert: true
+                }
+            };
+        });
+        if (operations.length > 0) {
+            await Model.bulkWrite(operations);
         }
-        await this.writeCollection(collection, items);
     }
     async deleteItem(collection, query) {
-        let items = await this.readCollection(collection);
-        const originalLength = items.length;
-        items = items.filter(item => {
-            for (const key in query) {
-                if (item[key] === query[key])
-                    return false;
-            }
-            return true;
-        });
-        if (items.length !== originalLength) {
-            await this.writeCollection(collection, items);
-        }
+        const Model = this.getModel(collection);
+        await Model.deleteMany(query);
     }
-    // Helper specifically for Message sorting/limiting since we removed Mongoose
+    // Specific Helpers
     async getMessages(sessionId, limit = 50, remoteJid) {
-        let messages = await this.readCollection('messages');
-        messages = messages.filter(m => m.sessionId === sessionId);
-        if (remoteJid) {
-            messages = messages.filter(m => m.remoteJid === remoteJid);
-        }
-        // Sort by timestamp desc
-        messages.sort((a, b) => b.timestamp - a.timestamp);
-        return messages.slice(0, limit);
+        const query = { sessionId };
+        if (remoteJid)
+            query.remoteJid = remoteJid;
+        const messages = await Message.find(query)
+            .sort({ timestamp: -1 })
+            .limit(limit);
+        return messages.map(this.normalizeItem);
     }
     async getContacts(sessionId) {
-        const contacts = await this.readCollection('contacts');
         // Return unique contacts for this session that have sent a message
-        return contacts.filter(c => c.sessionId === sessionId && c.hasMessaged === true);
+        const contacts = await Contact.find({ sessionId, hasMessaged: true });
+        return contacts.map(this.normalizeItem);
     }
 }
-export const storage = new FileStorage();
+export const storage = new MongoStorage();

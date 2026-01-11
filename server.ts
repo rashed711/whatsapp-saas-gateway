@@ -1,13 +1,13 @@
-import './env-loader';
+import './env-loader.js';
 import express from 'express';
 import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
-import { WhatsAppEngine } from './services/whatsappEngine';
-import { storage } from './services/storage';
-import { IUser } from './models/User';
-import { ISession } from './models/Session';
+import { WhatsAppEngine } from './services/whatsappEngine.js';
+import { storage } from './services/storage.js';
+import { IUser } from './models/User.js';
+import { ISession } from './models/Session.js';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';

@@ -1,5 +1,5 @@
-import { connectDB } from './db';
-import { User, Session, Contact, Message } from './models';
+import { connectDB } from './db.js';
+import { User, Session, Contact, Message } from './models/index.js';
 
 class MongoStorage {
     constructor() {
@@ -33,19 +33,19 @@ class MongoStorage {
     }
 
     async getItems(collection: string, query: any = {}): Promise<any[]> {
-        const Model = this.getModel(collection);
+        const Model: any = this.getModel(collection);
         const items = await Model.find(query).sort({ createdAt: -1 });
         return items.map(this.normalizeItem);
     }
 
     async getItem(collection: string, query: any): Promise<any | null> {
-        const Model = this.getModel(collection);
+        const Model: any = this.getModel(collection);
         const item = await Model.findOne(query);
         return this.normalizeItem(item);
     }
 
     async saveItem(collection: string, item: any): Promise<any> {
-        const Model = this.getModel(collection);
+        const Model: any = this.getModel(collection);
 
         let filter: any = {};
         if (item._id) {
@@ -73,7 +73,7 @@ class MongoStorage {
 
     async saveItems(collection: string, newItems: any[]): Promise<void> {
         if (newItems.length === 0) return;
-        const Model = this.getModel(collection);
+        const Model: any = this.getModel(collection);
 
         const operations = newItems.map(item => {
             let filter: any = {};
@@ -116,7 +116,7 @@ class MongoStorage {
     }
 
     async deleteItem(collection: string, query: any) {
-        const Model = this.getModel(collection);
+        const Model: any = this.getModel(collection);
         await Model.deleteMany(query);
     }
 

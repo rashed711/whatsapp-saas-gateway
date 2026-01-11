@@ -1,6 +1,4 @@
-
 import mongoose from 'mongoose';
-
 // --- User Schema ---
 const userSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true },
@@ -9,9 +7,7 @@ const userSchema = new mongoose.Schema({
     role: { type: String, enum: ['admin', 'user'], default: 'user' },
     isActive: { type: Boolean, default: true },
 }, { timestamps: true });
-
 export const User = mongoose.model('User', userSchema);
-
 // --- Session Schema ---
 const sessionSchema = new mongoose.Schema({
     id: { type: String, required: true, unique: true }, // sess_...
@@ -20,9 +16,7 @@ const sessionSchema = new mongoose.Schema({
     status: { type: String, default: 'IDLE' }, // IDLE, QR, CONNECTED
     // We don't store socket object here
 }, { timestamps: true });
-
 export const Session = mongoose.model('Session', sessionSchema);
-
 // --- Contact Schema ---
 const contactSchema = new mongoose.Schema({
     sessionId: { type: String, required: true, index: true },
@@ -32,12 +26,9 @@ const contactSchema = new mongoose.Schema({
     verifiedName: { type: String },
     hasMessaged: { type: Boolean, default: false }
 }, { timestamps: true });
-
 // Compound unique index: Prevent duplicates per session
 contactSchema.index({ sessionId: 1, id: 1 }, { unique: true });
-
 export const Contact = mongoose.model('Contact', contactSchema);
-
 // --- Message Schema ---
 const messageSchema = new mongoose.Schema({
     sessionId: { type: String, required: true, index: true },
@@ -49,11 +40,7 @@ const messageSchema = new mongoose.Schema({
     content: { type: Object }, // Raw content object
     status: { type: String }
 }, { timestamps: true });
-
 // Index for getting chat history
 messageSchema.index({ sessionId: 1, remoteJid: 1, timestamp: -1 });
-
 export const Message = mongoose.model('Message', messageSchema);
-
 export * from './AuthState.js';
-
