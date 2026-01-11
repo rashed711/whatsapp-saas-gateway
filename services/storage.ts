@@ -10,7 +10,7 @@ class MongoStorage {
         await connectDB();
     }
 
-    private getModel(collection: string) {
+    getModel(collection: string) {
         switch (collection) {
             case 'users': return User;
             case 'sessions': return Session;
