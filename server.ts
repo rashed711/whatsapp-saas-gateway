@@ -136,6 +136,20 @@ const requireAdmin = (req: any, res: any, next: any) => {
 // Seed Admin User
 const seedAdmin = async () => {
     try {
+        // Fix: Drop legacy 'email_1' index if it exists (causes user creation errors)
+        try {
+            const UserModel: any = storage.getModel('users');
+            if (UserModel) {
+                await UserModel.collection.dropIndex('email_1');
+                console.log('--> Dropped legacy index: email_1');
+            }
+        } catch (idxErr: any) {
+            // Ignore error if index doesn't exist
+            if (idxErr.code !== 27) { // 27 = Index not found
+                console.log('--> Note: email_1 index logic:', idxErr.message);
+            }
+        }
+
         const adminUser = await storage.getItem('users', { role: 'admin' });
         if (!adminUser) {
             console.log('Seeding default admin...');
