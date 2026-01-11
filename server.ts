@@ -270,15 +270,18 @@ app.get('/api/me', authenticateToken, async (req: any, res) => {
 
 // List Users (Admin Only)
 app.get('/api/users', authenticateToken, requireAdmin, async (req: any, res) => {
+    console.log('--> GET /api/users REQUEST');
     try {
         const users = await storage.getItems('users');
+        console.log(`--> Found ${users.length} users`);
         const safeUsers = users.map((u: any) => {
             const { password, ...rest } = u;
             return rest;
         });
         res.json(safeUsers.sort((a: any, b: any) => (b.createdAt || '').localeCompare(a.createdAt || '')));
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch users' });
+    } catch (error: any) {
+        console.error('--> GET /api/users ERROR:', error);
+        res.status(500).json({ error: 'Failed to fetch users', details: error.message });
     }
 });
 
