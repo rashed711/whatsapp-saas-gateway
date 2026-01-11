@@ -197,9 +197,15 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any,
         });
 
         res.json({ message: 'User created successfully', user: { id: user._id, name: user.name, username: user.username } });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Register error', error);
-        res.status(500).json({ error: 'Internal Server Error' });
+
+        // Debugging: Write error to file
+        import('fs').then(fs => {
+            fs.appendFileSync('server_error.log', `[${new Date().toISOString()}] Register Error: ${error.message}\nStack: ${error.stack}\n\n`);
+        });
+
+        res.status(500).json({ error: 'Internal Server Error', details: error.message });
     }
 });
 
