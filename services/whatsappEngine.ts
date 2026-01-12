@@ -159,10 +159,14 @@ export class WhatsAppEngine {
 
       // 2. Fallback: Parse Incoming Messages to extract sender number/name
       this.sock.ev.on('messages.upsert', async ({ messages, type }: { messages: any[], type: string }) => {
+        console.log(`[Engine] Message Event: type=${type}, count=${messages.length}`);
+
         if (type === 'notify' || type === 'append') {
           const contactsToUpdate = [];
 
           for (const msg of messages) {
+            console.log(`[Engine] Processing Msg: fromMe=${msg.key.fromMe}, remoteJid=${msg.key.remoteJid}, type=${Object.keys(msg.message || {})}`);
+
             if (msg.key.fromMe) continue;
 
             const remoteJid = msg.key.remoteJid;
