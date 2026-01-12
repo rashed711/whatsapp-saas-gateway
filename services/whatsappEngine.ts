@@ -170,7 +170,8 @@ export class WhatsAppEngine {
             if (msg.key.fromMe) continue;
 
             const remoteJid = msg.key.remoteJid;
-            if (!remoteJid || remoteJid.includes('@lid') || remoteJid.includes('@broadcast') || !remoteJid.includes('@s.whatsapp.net')) continue;
+            // Allow @s.whatsapp.net AND @lid (Lightning IDs)
+            if (!remoteJid || remoteJid.includes('@broadcast') || (!remoteJid.includes('@s.whatsapp.net') && !remoteJid.includes('@lid'))) continue;
 
             const pushName = msg.pushName;
 
