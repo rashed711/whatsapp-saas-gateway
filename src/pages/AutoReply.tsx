@@ -95,7 +95,9 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
             }
         } catch (error) {
             console.error('Failed to create rule', error);
-            alert('Failed to connect to server');
+            // DEBUG: Show exact URL being hit
+            const apiUrl = import.meta.env.VITE_API_URL;
+            alert(`Failed to connect! \nTarget URL: ${apiUrl}/api/autoreply \nError: ${error}`);
         }
     };
 

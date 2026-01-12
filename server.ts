@@ -26,7 +26,11 @@ app.use(express.json()); // Middleware to parse JSON
 
 // CORS Middleware
 // CORS Middleware
-app.use(cors());
+app.use(cors({
+    origin: true, // Allow any origin dynamically
+    credentials: true, // Allow cookies/headers
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+}));
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     maxHttpBufferSize: 1e7, // 10 MB
