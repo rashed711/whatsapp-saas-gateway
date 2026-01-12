@@ -131,9 +131,17 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
     };
 
     const getSessionName = (id?: string) => {
-        if (!id) return 'All Devices';
+        if (!id) return 'All Devices (Global)';
         const session = sessions.find(s => s.id === id);
-        return session ? session.name : 'Unknown Device';
+        return session ? `${session.name || 'Device'} (${session.phoneNumber || 'No Number'})` : 'Unknown Device';
+    };
+
+    const getSessionStatusColor = (id?: string) => {
+        if (!id) return 'bg-purple-500/20 text-purple-300 border-purple-500/30';
+        const session = sessions.find(s => s.id === id);
+        return session?.status === 'CONNECTED'
+            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+            : 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30';
     };
 
     return (
@@ -165,7 +173,7 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
                                     <Terminal className="w-3 h-3" />
                                     {rule.matchType === 'exact' ? 'Exact Match' : 'Contains'}
                                 </div>
-                                <div className={`px-2 py-0.5 rounded text-xs flex items-center gap-1 w-fit ${rule.sessionId ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-700 text-gray-400'}`}>
+                                <div className={`px-2 py-0.5 rounded text-xs flex items-center gap-1 w-fit border ${getSessionStatusColor(rule.sessionId)}`}>
                                     <Smartphone className="w-3 h-3" />
                                     {getSessionName(rule.sessionId)}
                                 </div>
