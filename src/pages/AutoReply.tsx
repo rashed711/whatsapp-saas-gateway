@@ -90,15 +90,24 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
                 fetchRules();
                 alert('Rule created successfully!');
             } else {
-                const errData = await res.json();
-                console.error('Server error:', errData);
-                alert(`Error: ${errData.error || 'Failed to create rule'}`);
+                const text = await res.text();
+                try {
+                    const errData = JSON.parse(text);
+                    alert(`Error: ${errData.error || 'Failed to create rule'}`);
+                } catch (e) {
+                    // Non-JSON response (e.g., 401 Unauthorized, 404, 502)
+                    console.error('Non-JSON response:', text);
+                    alert(`Server Error (${res.status}): ${text.substring(0, 100)}`);
+                    if (res.status === 401 || res.status === 403) {
+                        alert('Your session may have expired. Please logout and login again.');
+                    }
+                }
             }
         } catch (error) {
             console.error('Failed to create rule', error);
             // DEBUG: Show exact URL being hit
-            const apiUrl = import.meta.env.VITE_API_URL;
-            alert(`Failed to connect! \nTarget URL: ${apiUrl}/api/autoreply \nError: ${error}`);
+            const baseUrl = import.meta.env.VITE_API_URL.replace(/\/$/, '');
+            alert(`Failed to connect! \nTarget URL: ${baseUrl}/api/autoreply \nError: ${error}`);
         }
     };
 
