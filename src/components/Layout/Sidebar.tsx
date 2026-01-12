@@ -16,6 +16,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose }) => {
         { to: '/', icon: <LayoutDashboard size={20} />, label: 'لوحة التحكم' },
         { to: '/devices', icon: <Smartphone size={20} />, label: 'الأجهزة المتصلة' },
         { to: '/campaigns', icon: <Send size={20} />, label: 'إرسال الحملات' },
+        { to: '/autoreply', icon: <Bot size={20} />, label: 'الرد الآلي' },
     ];
 
     if (isAdmin) {
