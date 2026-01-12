@@ -68,7 +68,8 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
             const token = localStorage.getItem('token');
             console.log('Creating rule...', { keyword, response, matchType, sessionId: selectedSessionId });
 
-            const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3050'}/api/autoreply`, {
+            const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3050').replace(/\/$/, '');
+            const res = await fetch(`${baseUrl}/api/autoreply`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -115,7 +116,8 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
         if (!confirm('Are you sure you want to delete this rule?')) return;
         try {
             const token = localStorage.getItem('token');
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/autoreply/${id}`, {
+            const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3050').replace(/\/$/, '');
+            const res = await fetch(`${baseUrl}/api/autoreply/${id}`, {
                 method: 'DELETE',
                 headers: { Authorization: `Bearer ${token}` }
             });
