@@ -135,16 +135,19 @@ export class WhatsAppEngine {
               const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
 
               if (textContent) {
+                console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
                 const replyText = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
 
                 if (replyText) {
-                  console.log(`[AutoReply] Matched rule for ${remoteJid}: "${textContent}" -> "${replyText}"`);
+                  console.log(`[AutoReply] Match found! Replying to ${remoteJid}: "${replyText}"`);
 
                   // Simulate natural delay (1-3 seconds)
                   await new Promise(r => setTimeout(r, Math.random() * 2000 + 1000));
 
                   // Send Reply
                   await this.sock.sendMessage(remoteJid, { text: replyText }, { quoted: msg });
+                } else {
+                  console.log(`[AutoReply] No match found for: "${textContent}"`);
                 }
               }
             } catch (err) {

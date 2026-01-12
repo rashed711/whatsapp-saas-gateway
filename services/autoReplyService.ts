@@ -44,6 +44,7 @@ export class AutoReplyService {
         // For file storage, we filter in memory.
         const allRules: IAutoReply[] = await storage.getItems('autoreplies', { userId });
         const activeRules = allRules.filter(r => r.isActive);
+        console.log(`[AutoReplyService] Found ${activeRules.length} active rules for user ${userId}. Checking against content: "${messageContent}"`);
 
         const contentLower = messageContent.toLowerCase().trim();
 
