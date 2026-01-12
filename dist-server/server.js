@@ -1,5 +1,6 @@
 import './env-loader.js';
 import express from 'express';
+import cors from 'cors';
 import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -17,15 +18,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json()); // Middleware to parse JSON
 // CORS Middleware
-app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*"); // Allow all origins (or specify your frontend URL)
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    next();
-});
+// CORS Middleware
+app.use(cors());
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     maxHttpBufferSize: 1e7, // 10 MB
