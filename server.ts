@@ -7,6 +7,7 @@ import { Server } from 'socket.io';
 import { WhatsAppEngine } from './services/whatsappEngine.js';
 import { storage } from './services/storage.js';
 import { CampaignService } from './services/campaignService.js';
+import { SessionService } from './services/sessionService.js';
 import { IUser } from './models/User.js';
 import { ISession } from './models/Session.js';
 import dotenv from 'dotenv';
@@ -31,48 +32,7 @@ const io = new Server(httpServer, {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-it';
 
-// Session Management (InMemory Map for active engines, Persistence via FileStorage)
-interface ActiveSession {
-    id: string;
-    name: string;
-    userId: string;
-    engine: WhatsAppEngine;
-}
 
-const sessions = new Map<string, ActiveSession>();
-
-// Helper: Load sessions from storage
-const loadSessions = async () => {
-    try {
-        console.log('Loading sessions from storage...');
-        const storedSessions: ISession[] = await storage.getItems('sessions');
-
-        for (const s of storedSessions) {
-            if (!s.userId) continue;
-
-            const engine = new WhatsAppEngine(s.userId, s.id);
-            sessions.set(s.id, {
-                id: s.id,
-                name: s.name,
-                userId: s.userId,
-                engine
-            });
-
-            if (s.status === 'CONNECTED') {
-                console.log(`[Startup] Attempting to resume session ${s.id} for user ${s.userId}...`);
-                engine.startSession(
-                    (qr) => console.log(`[Startup] QR generated for ${s.id}`),
-                    () => console.log(`[Startup] Session ${s.id} resumed!`)
-                ).catch(err => console.error(`[Startup] Failed to resume ${s.id}`, err));
-            }
-        }
-        console.log(`Loaded ${sessions.size} active sessions.`);
-        return true;
-    } catch (error) {
-        console.error('Failed to load sessions:', error);
-        return false;
-    }
-};
 
 // Stats (Mock/Simple In-Memory)
 let stats = {
@@ -96,7 +56,7 @@ app.get('/stats', async (req, res) => {
             timestamp: { $gte: startOfDay.getTime() }
         });
 
-        const activeDevices = Array.from(sessions.values()).filter(s => s.engine.currentStatus === 'CONNECTED').length;
+        const activeDevices = SessionService.getAllSessions().filter(s => s.engine.currentStatus === 'CONNECTED').length;
 
         res.json({
             messagesToday,
@@ -200,7 +160,7 @@ const PORT = 3050;
 // Initialize & Start Server
 const startServer = async () => {
     await storage.init(); // Ensure data dir exists
-    await loadSessions();
+    await SessionService.loadSessions();
     await seedAdmin();
 
     httpServer.listen(PORT, () => {
@@ -274,7 +234,7 @@ app.post('/api/auth/login', async (req, res) => {
         const validPassword = await bcrypt.compare(password, user.password || '');
         if (!validPassword) return res.status(400).json({ error: 'Invalid password' });
 
-        const token = jwt.sign({ userId: user._id, username: user.username, role: user.role }, JWT_SECRET);
+        const token = jwt.sign({ userId: user._id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         res.json({ token, user: { id: user._id, name: user.name, username: user.username, role: user.role } });
     } catch (error) {
         console.error('Login error', error);
@@ -382,8 +342,7 @@ app.post('/api/auth/change-password', authenticateToken, async (req: any, res) =
 
 // Get User's Sessions
 app.get('/api/sessions', authenticateToken, async (req: any, res) => {
-    const userSessions = Array.from(sessions.values())
-        .filter(s => s.userId === req.user.userId)
+    const userSessions = SessionService.getUserSessions(req.user.userId)
         .map(s => ({
             id: s.id,
             name: s.name,
@@ -398,7 +357,7 @@ app.post('/api/sessions/:sessionId/send', authenticateToken, async (req: any, re
     const { sessionId } = req.params;
     const { number, type, content, caption } = req.body;
 
-    const session = sessions.get(sessionId);
+    const session = SessionService.getSession(sessionId);
 
     // Isolation Check
     if (!session || session.userId !== req.user.userId) {
@@ -451,7 +410,7 @@ app.post('/api/sessions/:sessionId/send', authenticateToken, async (req: any, re
 app.get('/api/sessions/:sessionId/contacts', authenticateToken, async (req: any, res) => {
     const { sessionId } = req.params;
 
-    const session = sessions.get(sessionId);
+    const session = SessionService.getSession(sessionId);
     // Isolation Check
     if (!session || session.userId !== req.user.userId) {
         return res.status(404).json({ error: 'Session not found or access denied' });
@@ -471,7 +430,7 @@ app.get('/api/sessions/:sessionId/messages', authenticateToken, async (req: any,
     const { sessionId } = req.params;
     const { jid, limit = 50 } = req.query;
 
-    const session = sessions.get(sessionId);
+    const session = SessionService.getSession(sessionId);
     // Isolation Check
     if (!session || session.userId !== req.user.userId) {
         return res.status(404).json({ error: 'Session not found or access denied' });
@@ -509,8 +468,7 @@ io.on('connection', (socket) => {
 
     // List Sessions (Filtered by User)
     socket.on('list-sessions', () => {
-        const userSessions = Array.from(sessions.values())
-            .filter(s => s.userId === userId)
+        const userSessions = SessionService.getUserSessions(userId)
             .map(s => ({
                 id: s.id,
                 name: s.name,
@@ -522,16 +480,7 @@ io.on('connection', (socket) => {
     // Create Session
     socket.on('create-session', async ({ name }, callback) => {
         try {
-            const sessionId = 'sess_' + Date.now();
-            const engine = new WhatsAppEngine(userId, sessionId); // Use userId for auth storage separation
-            sessions.set(sessionId, { id: sessionId, name, userId, engine });
-
-            // Persist to Storage with userId
-            try {
-                await storage.saveItem('sessions', { id: sessionId, name, userId, status: 'IDLE' });
-            } catch (saveError) {
-                console.error('Failed to save session to storage:', saveError);
-            }
+            const sessionId = await SessionService.createSession(userId, name);
 
             socket.emit('session-created', { id: sessionId, name, status: 'IDLE' });
             // Only update this user
@@ -550,54 +499,15 @@ io.on('connection', (socket) => {
 
     // Delete Session
     socket.on('delete-session', async ({ sessionId }) => {
-        const session = sessions.get(sessionId);
-        // Ownership check
-        if (session && session.userId === userId) {
-            await session.engine.logout();
-            sessions.delete(sessionId);
-
-            try {
-                await storage.deleteItem('sessions', { id: sessionId, userId });
-            } catch (e) {
-                console.error('Failed to delete session from storage:', e);
-            }
+        const result = await SessionService.deleteSession(sessionId, userId);
+        if (result) {
             io.to(`user:${userId}`).emit('sessions-updated');
         }
     });
 
     // Start Session (Connect)
     socket.on('start-session', async ({ sessionId }) => {
-        const session = sessions.get(sessionId);
-        if (!session || session.userId !== userId) return socket.emit('error', 'Session not found');
-
-        try {
-            socket.emit('session-status', { sessionId, status: 'connecting' });
-
-            await session.engine.startSession(
-                (qrCodeDataUrl) => {
-                    socket.emit('session-qr', { sessionId, qr: qrCodeDataUrl });
-                    socket.emit('session-status', { sessionId, status: 'qr' });
-                    // Update status in storage
-                    storage.getItem('sessions', { id: sessionId }).then(s => {
-                        if (s) { s.status = 'QR'; storage.saveItem('sessions', s); }
-                    });
-
-                    io.to(`user:${userId}`).emit('sessions-updated');
-                },
-                () => {
-                    console.log(`Session ${sessionId} connected!`);
-                    socket.emit('session-status', { sessionId, status: 'connected' });
-                    // Update status in storage
-                    storage.getItem('sessions', { id: sessionId }).then(s => {
-                        if (s) { s.status = 'CONNECTED'; storage.saveItem('sessions', s); }
-                    });
-                    io.to(`user:${userId}`).emit('sessions-updated');
-                }
-            );
-        } catch (error) {
-            console.error('Session start error:', error);
-            socket.emit('session-status', { sessionId, status: 'error' });
-        }
+        await SessionService.startSessionConnection(sessionId, userId, socket, io);
     });
 
     // Stop Campaign
@@ -608,7 +518,7 @@ io.on('connection', (socket) => {
     // Send Message
     socket.on('send-message', async (data) => {
         const { sessionId, numbers, type, content, caption, minDelay = 3, maxDelay = 10 } = data;
-        const session = sessions.get(sessionId);
+        const session = SessionService.getSession(sessionId);
 
         // Security Check
         if (!session || session.userId !== userId) {
@@ -619,19 +529,8 @@ io.on('connection', (socket) => {
         await CampaignService.startCampaign(socket, data, session, userId);
     });
 
-
-
     // Logout
     socket.on('logout', async ({ sessionId }) => {
-        const session = sessions.get(sessionId);
-        if (session && session.userId === userId) {
-            await session.engine.logout();
-            socket.emit('session-status', { sessionId, status: 'disconnected' });
-            // Update status in storage
-            storage.getItem('sessions', { id: sessionId }).then(s => {
-                if (s) { s.status = 'DISCONNECTED'; storage.saveItem('sessions', s); }
-            });
-            io.to(`user:${userId}`).emit('sessions-updated');
-        }
+        await SessionService.logoutSession(sessionId, userId, socket, io);
     });
 });

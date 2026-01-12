@@ -16,6 +16,7 @@ export class WhatsAppEngine {
     sessionId;
     status = 'IDLE';
     sock = null;
+    retryCount = 0;
     constructor(userId, sessionId) {
         this.userId = userId;
         this.sessionId = sessionId;
@@ -40,6 +41,7 @@ export class WhatsAppEngine {
                 logger: P({ level: 'silent' }), // Reduce logs for production
                 browser: ['WhatsApp Gateway', 'Chrome', '1.0.0'],
                 defaultQueryTimeoutMs: 60000,
+                connectTimeoutMs: 10000, // Explicit connection timeout
             });
             // Handle Connection Updates
             this.sock.ev.on('connection.update', async (update) => {
@@ -52,6 +54,7 @@ export class WhatsAppEngine {
                 if (connection === 'open') {
                     console.log(`[Engine] Session ${this.sessionId} is now CONNECTED.`);
                     this.status = 'CONNECTED';
+                    this.retryCount = 0; // Reset retry count
                     onConnected();
                 }
                 else if (connection === 'close') {
@@ -59,9 +62,10 @@ export class WhatsAppEngine {
                     console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
                     const shouldReconnect = reason !== DisconnectReason.loggedOut;
                     if (shouldReconnect) {
-                        console.log('[Engine] Reconnecting...');
-                        // Add a small delay for stability
-                        setTimeout(() => this.startSession(onQR, onConnected), 3000);
+                        const delay = Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Exponential backoff max 30s
+                        console.log(`[Engine] Reconnecting in ${delay}ms... (Attempt ${this.retryCount + 1})`);
+                        this.retryCount++;
+                        setTimeout(() => this.startSession(onQR, onConnected), delay);
                     }
                     else {
                         console.log('[Engine] Session logged out. Stopping.');

@@ -20,6 +20,7 @@ export class WhatsAppEngine {
   private sessionId: string;
   private status: 'IDLE' | 'QR' | 'CONNECTED' | 'ERROR' = 'IDLE';
   private sock: any = null;
+  private retryCount = 0;
 
   constructor(userId: string, sessionId: string) {
     this.userId = userId;
@@ -49,6 +50,7 @@ export class WhatsAppEngine {
         logger: P({ level: 'silent' }), // Reduce logs for production
         browser: ['WhatsApp Gateway', 'Chrome', '1.0.0'],
         defaultQueryTimeoutMs: 60000,
+        connectTimeoutMs: 10000, // Explicit connection timeout
       });
 
       // Handle Connection Updates
@@ -64,6 +66,7 @@ export class WhatsAppEngine {
         if (connection === 'open') {
           console.log(`[Engine] Session ${this.sessionId} is now CONNECTED.`);
           this.status = 'CONNECTED';
+          this.retryCount = 0; // Reset retry count
           onConnected();
         } else if (connection === 'close') {
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
@@ -72,9 +75,11 @@ export class WhatsAppEngine {
           const shouldReconnect = reason !== DisconnectReason.loggedOut;
 
           if (shouldReconnect) {
-            console.log('[Engine] Reconnecting...');
-            // Add a small delay for stability
-            setTimeout(() => this.startSession(onQR, onConnected), 3000);
+            const delay = Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Exponential backoff max 30s
+            console.log(`[Engine] Reconnecting in ${delay}ms... (Attempt ${this.retryCount + 1})`);
+
+            this.retryCount++;
+            setTimeout(() => this.startSession(onQR, onConnected), delay);
           } else {
             console.log('[Engine] Session logged out. Stopping.');
             this.status = 'ERROR';
