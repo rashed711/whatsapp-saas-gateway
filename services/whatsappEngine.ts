@@ -167,7 +167,28 @@ export class WhatsAppEngine {
           for (const msg of messages) {
             console.log(`[Engine] Processing Msg: fromMe=${msg.key.fromMe}, remoteJid=${msg.key.remoteJid}, type=${Object.keys(msg.message || {})}`);
 
-            if (msg.key.fromMe) continue;
+            if (msg.key.fromMe) {
+              // --- Human Takeover Logic ---
+              // If user replies manually, mute the bot for this chat
+              const targetJid = msg.key.remoteJid;
+              if (targetJid && !targetJid.includes('@broadcast') && !targetJid.includes('@g.us')) {
+                // Check for "Unmute" command
+                const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                if (text && (text.toLowerCase() === '#bot' || text.toLowerCase() === '#unmute')) {
+                  console.log(`[Human Takeover] User re-enabled bot for ${targetJid}`);
+                  await storage.deleteItem('muted_chats', { sessionId: this.sessionId, jid: targetJid });
+                } else {
+                  console.log(`[Human Takeover] Manual reply detected. Muting bot for ${targetJid}`);
+                  await storage.saveItem('muted_chats', {
+                    sessionId: this.sessionId,
+                    jid: targetJid,
+                    mutedAt: new Date(),
+                    userId: this.userId
+                  });
+                }
+              }
+              continue;
+            }
 
             const remoteJid = msg.key.remoteJid;
             // Allow @s.whatsapp.net AND @lid (Lightning IDs)
@@ -177,67 +198,75 @@ export class WhatsAppEngine {
 
             // --- Auto Reply Logic ---
             try {
-              // Extract text content (support conversation or extendedTextMessage)
-              const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+              // 0. Check if Chat is Muted (Human Takeover)
+              const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, jid: remoteJid });
 
-              if (textContent) {
-                console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
-                const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
+              if (isMuted) {
+                // Optional: Log that we skipped
+                // console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Human Mode.`);
+              } else {
+                // Extract text content (support conversation or extendedTextMessage)
+                const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
 
-                if (matchedRule) {
-                  console.log(`[AutoReply] Match found! RuleID: ${matchedRule._id} | Type: ${matchedRule.replyType || 'text'}`);
+                if (textContent) {
+                  console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
+                  const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
 
-                  // Simulate human behavior
-                  await this.sock.sendPresenceUpdate('composing', remoteJid);
-                  const humanDelay = Math.floor(Math.random() * 5000) + 3000;
-                  console.log(`[AutoReply] Waiting ${humanDelay}ms...`);
-                  await new Promise(r => setTimeout(r, humanDelay));
-                  await this.sock.sendPresenceUpdate('paused', remoteJid);
+                  if (matchedRule) {
+                    console.log(`[AutoReply] Match found! RuleID: ${matchedRule._id} | Type: ${matchedRule.replyType || 'text'}`);
 
-                  // Send Reply based on Type
-                  const responseText = matchedRule.response; // Caption or Text
+                    // Simulate human behavior
+                    await this.sock.sendPresenceUpdate('composing', remoteJid);
+                    const humanDelay = Math.floor(Math.random() * 5000) + 3000;
+                    console.log(`[AutoReply] Waiting ${humanDelay}ms...`);
+                    await new Promise(r => setTimeout(r, humanDelay));
+                    await this.sock.sendPresenceUpdate('paused', remoteJid);
 
-                  try {
-                    if (matchedRule.replyType === 'image' && matchedRule.mediaUrl) {
-                      await this.sock.sendMessage(remoteJid, {
-                        image: { url: matchedRule.mediaUrl },
-                        caption: responseText
-                      }, { quoted: msg });
+                    // Send Reply based on Type
+                    const responseText = matchedRule.response; // Caption or Text
 
-                    } else if (matchedRule.replyType === 'video' && matchedRule.mediaUrl) {
-                      await this.sock.sendMessage(remoteJid, {
-                        video: { url: matchedRule.mediaUrl },
-                        caption: responseText
-                      }, { quoted: msg });
+                    try {
+                      if (matchedRule.replyType === 'image' && matchedRule.mediaUrl) {
+                        await this.sock.sendMessage(remoteJid, {
+                          image: { url: matchedRule.mediaUrl },
+                          caption: responseText
+                        }, { quoted: msg });
 
-                    } else if (matchedRule.replyType === 'document' && matchedRule.mediaUrl) {
-                      await this.sock.sendMessage(remoteJid, {
-                        document: { url: matchedRule.mediaUrl },
-                        mimetype: 'application/pdf', // Default, maybe detect from extension later
-                        fileName: matchedRule.fileName || 'file.pdf',
-                        caption: responseText
-                      }, { quoted: msg });
+                      } else if (matchedRule.replyType === 'video' && matchedRule.mediaUrl) {
+                        await this.sock.sendMessage(remoteJid, {
+                          video: { url: matchedRule.mediaUrl },
+                          caption: responseText
+                        }, { quoted: msg });
 
-                    } else if (matchedRule.replyType === 'audio' && matchedRule.mediaUrl) {
-                      await this.sock.sendMessage(remoteJid, {
-                        audio: { url: matchedRule.mediaUrl },
-                        ptt: true // Send as Voice Note
-                      }, { quoted: msg });
+                      } else if (matchedRule.replyType === 'document' && matchedRule.mediaUrl) {
+                        await this.sock.sendMessage(remoteJid, {
+                          document: { url: matchedRule.mediaUrl },
+                          mimetype: 'application/pdf', // Default, maybe detect from extension later
+                          fileName: matchedRule.fileName || 'file.pdf',
+                          caption: responseText
+                        }, { quoted: msg });
 
-                    } else {
-                      // Default: Text
-                      await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
+                      } else if (matchedRule.replyType === 'audio' && matchedRule.mediaUrl) {
+                        await this.sock.sendMessage(remoteJid, {
+                          audio: { url: matchedRule.mediaUrl },
+                          ptt: true // Send as Voice Note
+                        }, { quoted: msg });
+
+                      } else {
+                        // Default: Text
+                        await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
+                      }
+                      console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
+
+                    } catch (sendErr) {
+                      console.error('[AutoReply] Failed to send response:', sendErr);
+                      // Fallback to text if media fails?
+                      await this.sock.sendMessage(remoteJid, { text: `[Error sending media] ${responseText}` }, { quoted: msg });
                     }
-                    console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
 
-                  } catch (sendErr) {
-                    console.error('[AutoReply] Failed to send response:', sendErr);
-                    // Fallback to text if media fails?
-                    await this.sock.sendMessage(remoteJid, { text: `[Error sending media] ${responseText}` }, { quoted: msg });
+                  } else {
+                    console.log(`[AutoReply] No match found for: "${textContent}"`);
                   }
-
-                } else {
-                  console.log(`[AutoReply] No match found for: "${textContent}"`);
                 }
               }
             } catch (err) {
