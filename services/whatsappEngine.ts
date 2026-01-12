@@ -12,7 +12,7 @@ import { fileURLToPath } from 'url';
 import { storage } from './storage.js';
 import { AutoReplyService } from './autoReplyService.js';
 import { useMongoDBAuthState } from './mongoAuth.js';
-import { AutoReplyService } from './autoReplyService.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -149,27 +149,6 @@ export class WhatsAppEngine {
               }
             } catch (err) {
               console.error('[AutoReply] Error processing message:', err);
-            }
-            // ------------------------
-            // Auto Reply Logic (Smart Bot)
-            // ------------------------
-            if (!msg.key.fromMe && messageType === 'conversation' || messageType === 'extendedTextMessage') {
-              try {
-                const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-                if (content) {
-                  const replyText = await AutoReplyService.getResponse(this.userId, content, this.sessionId);
-
-                  if (replyText) {
-                    console.log(`[AutoReply] Match found! Replying to ${remoteJid}: "${replyText}"`);
-                    // Add a small delay for human-like feeling
-                    await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
-
-                    await this.sock.sendMessage(remoteJid, { text: replyText });
-                  }
-                }
-              } catch (arErr) {
-                console.error('[AutoReply] Error processing message:', arErr);
-              }
             }
             // ------------------------
 
