@@ -1,5 +1,5 @@
 import { connectDB } from './db.js';
-import { User, Session, Contact, Message } from './models/index.js';
+import { User, Session, Contact, Message, AutoReply } from './models/index.js';
 class MongoStorage {
     constructor() {
         this.init();
@@ -13,6 +13,7 @@ class MongoStorage {
             case 'sessions': return Session;
             case 'contacts': return Contact;
             case 'messages': return Message;
+            case 'autoreplies': return AutoReply;
             default: throw new Error(`Unknown collection: ${collection}`);
         }
     }

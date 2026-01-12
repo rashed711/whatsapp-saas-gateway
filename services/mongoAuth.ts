@@ -1,6 +1,6 @@
 
 import { AuthenticationCreds, AuthenticationState, BufferJSON, initAuthCreds, SignalDataTypeMap } from '@whiskeysockets/baileys';
-import { AuthState } from './models/index.js';
+import { AuthState } from '../models/index.js';
 
 export const useMongoDBAuthState = async (sessionId: string): Promise<{ state: AuthenticationState, saveCreds: () => Promise<void> }> => {
 

@@ -1,5 +1,6 @@
 import { connectDB } from './db.js';
-import { User, Session, Contact, Message, AutoReply } from './models/index.js';
+import { User, Session, Contact, Message } from '../models/index.js';
+import { AutoReply } from '../models/AutoReply.js';
 
 class MongoStorage {
     constructor() {
