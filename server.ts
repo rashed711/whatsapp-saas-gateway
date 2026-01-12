@@ -278,6 +278,7 @@ app.get('/api/users', authenticateToken, requireAdmin, async (req: any, res) => 
             const { password, ...rest } = u;
             return rest;
         });
+        // Sort by date (newest first)
         res.json(safeUsers.sort((a: any, b: any) => {
             const dateA = new Date(a.createdAt || 0).getTime();
             const dateB = new Date(b.createdAt || 0).getTime();
