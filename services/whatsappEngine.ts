@@ -67,6 +67,47 @@ export class WhatsAppEngine {
 
         if (connection === 'open') {
           console.log(`[Engine] Session ${this.sessionId} is now CONNECTED.`);
+
+          // -----------------------------------------------------
+          // UNIQUE SESSION ENFORCEMENT (One Number Policy)
+          // -----------------------------------------------------
+          const userJid = this.sock?.user?.id;
+          const phoneNumber = userJid ? userJid.split(':')[0] : null;
+
+          if (phoneNumber) {
+            console.log(`[Engine] Verifying uniqueness for number: ${phoneNumber}`);
+
+            // 1. Update this session with the phone number
+            await storage.saveItem('sessions', {
+              id: this.sessionId,
+              userId: this.userId, // Ensure userId is preserved
+              phoneNumber: phoneNumber,
+              status: 'CONNECTED',
+              updatedAt: new Date()
+            });
+
+            // 2. Check for OTHER sessions with the same phone number
+            const allSessions = await storage.getItems('sessions', { phoneNumber });
+
+            // Filter out CURRENT session
+            const duplicates = allSessions.filter(s => s.id !== this.sessionId && s.status !== 'TERMINATED');
+
+            if (duplicates.length > 0) {
+              console.warn(`[Engine] SECURITY ALERT: Found ${duplicates.length} duplicate sessions for number ${phoneNumber}. Terminating them.`);
+
+              for (const dup of duplicates) {
+                console.log(`[Engine] Killing duplicate session: ${dup.id}`);
+                // Mark as terminated in DB
+                await storage.saveItem('sessions', { id: dup.id, status: 'TERMINATED' });
+
+                // Ideally, we would emit an event to server.ts to kill the specific engine instance,
+                // but marking it TERMINATED in DB prevents it from being resumed on restart.
+                // The 440 conflict from WhatsApp will eventually disconnect the zombie if it's running.
+              }
+            }
+          }
+          // -----------------------------------------------------
+
           this.status = 'CONNECTED';
           this.retryCount = 0; // Reset retry count
           onConnected();
