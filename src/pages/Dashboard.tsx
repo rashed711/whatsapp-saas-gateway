@@ -15,23 +15,19 @@ const Dashboard: React.FC<DashboardProps> = ({ socket }) => {
     // In a real app, we'd fetch these from an API or listen to socket events
     // For now, let's mock/simulate some data or ask backend for /stats
     useEffect(() => {
-        fetch('http://localhost:3050/stats')
-            .then(res => res.json())
-            .then(data => setStats(data))
-            .catch(err => {
-                // Fallback mock data if server endpoint isn't ready
-                console.log('Using fallback stats');
-                setStats({ messagesToday: 1240, activeDevices: 1, uptime: '99.9%' });
-            });
+        const fetchStats = () => {
+            fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3050'}/stats`)
+                .then(res => res.json())
+                .then(data => setStats(data))
+                .catch(err => console.error('Failed to fetch stats:', err));
+        };
+
+        fetchStats();
 
         const interval = setInterval(() => {
             // Refresh stats every 30s
-            fetch('http://localhost:3050/stats')
-                .then(res => res.json())
-                .then(data => setStats(data))
-                .catch(() => { });
+            fetchStats();
         }, 30000);
-
         return () => clearInterval(interval);
     }, []);
 

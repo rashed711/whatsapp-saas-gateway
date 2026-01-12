@@ -7,7 +7,6 @@ import Users from './src/pages/Users';
 import Dashboard from './src/pages/Dashboard';
 import Devices from './src/pages/Devices';
 import Campaigns from './src/pages/Campaigns';
-import Messages from './src/pages/Messages';
 import { Menu } from 'lucide-react';
 
 const App = () => {
@@ -109,7 +108,6 @@ const App = () => {
         <Route element={<DashboardLayout />}>
           <Route path="/" element={<Dashboard socket={socket} />} />
           <Route path="/devices" element={<Devices socket={socket} />} />
-          <Route path="/messages" element={<Messages />} />
           <Route path="/campaigns" element={<Campaigns socket={socket} />} />
           <Route path="/users" element={<Users />} />
         </Route>

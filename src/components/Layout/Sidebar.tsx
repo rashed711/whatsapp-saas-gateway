@@ -15,7 +15,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose }) => {
     const links = [
         { to: '/', icon: <LayoutDashboard size={20} />, label: 'لوحة التحكم' },
         { to: '/devices', icon: <Smartphone size={20} />, label: 'الأجهزة المتصلة' },
-        { to: '/messages', icon: <MessageSquare size={20} />, label: 'الرسائل الواردة' },
         { to: '/campaigns', icon: <Send size={20} />, label: 'إرسال الحملات' },
     ];
 
