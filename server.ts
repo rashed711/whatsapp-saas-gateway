@@ -21,87 +21,28 @@ dotenv.config({ path: '.env.local' });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const app = express();
-app.use(express.json()); // Middleware to parse JSON
+// --- Global Middleware ---
+app.use(express.json({ limit: '50mb' })); // Combined Body Parser (JSON)
+app.use(express.urlencoded({ extended: true, limit: '50mb' })); // Body Parser (URL Encoded)
 
-app.get('/', (req, res) => res.send('WhatsApp Gateway API is Running 🚀'));
+app.get('/', (req, res) => res.send('WhatsApp Gateway API is Running 🚀 (V: 1.0.3)')); // Single Root Route
 
-// CORS Middleware
-// CORS Middleware
+// CORS Middleware (Single Source of Truth)
 app.use(cors({
-    origin: true, // Allow any origin dynamically
-    credentials: true, // Allow cookies/headers
+    origin: true,
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
+
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-    maxHttpBufferSize: 1e7, // 10 MB
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    }
+    maxHttpBufferSize: 1e7,
+    cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-it';
 
-
-
-// Stats (Mock/Simple In-Memory)
-let stats = {
-    messagesToday: 0,
-    startTime: Date.now()
-};
-
-app.get('/stats', async (req, res) => {
-    const uptimeSeconds = Math.floor((Date.now() - stats.startTime) / 1000);
-    const uptimeStr = uptimeSeconds > 3600
-        ? `${Math.floor(uptimeSeconds / 3600)}h ${Math.floor((uptimeSeconds % 3600) / 60)}m`
-        : `${Math.floor(uptimeSeconds / 60)}m ${uptimeSeconds % 60}s`;
-
-    try {
-        // Count messages sent today
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
-
-        const MessageModel: any = storage.getModel('messages');
-        const messagesToday = await MessageModel.countDocuments({
-            timestamp: { $gte: startOfDay.getTime() }
-        });
-
-        const activeDevices = SessionService.getAllSessions().filter(s => s.engine.currentStatus === 'CONNECTED').length;
-
-        res.json({
-            messagesToday,
-            activeDevices,
-            uptime: uptimeStr
-        });
-    } catch (error) {
-        console.error('Stats Error:', error);
-        res.status(500).json({
-            messagesToday: 0,
-            activeDevices: 0,
-            uptime: uptimeStr
-        });
-    }
-});
-
-app.get('/', (req, res) => {
-    res.send('WhatsApp Backend Server is running (File Storage API)!');
-});
-
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// Global CORS
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    next();
-});
+// --- Stats Endpoint ---
 
 // Middleware: Authenticate Token & Optional Admin Check
 const authenticateToken = (req: any, res: any, next: any) => {
@@ -460,6 +401,7 @@ app.get('/api/sessions/:sessionId/messages', authenticateToken, async (req: any,
 // --- Auto Reply Routes ---
 
 app.get('/api/autoreply', authenticateToken, async (req: any, res) => {
+    console.log(`[GET] /api/autoreply - User: ${req.user.userId}`);
     try {
         const rules = await AutoReplyService.getRules(req.user.userId);
         res.json(rules);
@@ -469,6 +411,7 @@ app.get('/api/autoreply', authenticateToken, async (req: any, res) => {
 });
 
 app.post('/api/autoreply', authenticateToken, async (req: any, res) => {
+    console.log(`[POST] /api/autoreply - User: ${req.user.userId}`, req.body);
     try {
         const { keyword, response, matchType, sessionId } = req.body;
         if (!keyword || !response) return res.status(400).json({ error: 'Missing keyword or response' });
