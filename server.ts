@@ -414,19 +414,41 @@ app.get('/api/autoreply', authenticateToken, async (req: any, res) => {
 
 // Create Rule
 app.post('/api/autoreply', authenticateToken, async (req: any, res) => {
-    userId: req.user.userId,
-        sessionId: sessionId || undefined, // undefined means "All Devices"
+    try {
+        console.log(`[POST] /api/autoreply - User: ${req.user.userId}`, req.body);
+        const { keyword, response, matchType, sessionId } = req.body;
+
+        if (!keyword || !response) return res.status(400).json({ error: 'Missing keyword or response' });
+
+        const rule = await AutoReplyService.createRule({
+            userId: req.user.userId,
+            sessionId: sessionId || undefined, // undefined means "All Devices"
             keyword,
             response,
             matchType: matchType || 'exact',
-                isActive: true
-});
-res.json(rule);
-    } catch (e) {
-    res.status(500).json({ error: 'Failed to create rule' });
-}
+            isActive: true
+        });
+        res.json(rule);
+    } catch (e: any) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
+// Update Rule
+app.put('/api/autoreply/:id', authenticateToken, async (req: any, res) => {
+    try {
+        console.log(`[PUT] /api/autoreply/${req.params.id} - User: ${req.user.userId}`, req.body);
+        const rule = await AutoReplyService.updateRule(req.params.id, req.user.userId, req.body);
+        if (!rule) return res.status(404).json({ error: 'Rule not found' });
+        res.json(rule);
+    } catch (e: any) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Delete Rule
 app.delete('/api/autoreply/:id', authenticateToken, async (req: any, res) => {
     try {
         await AutoReplyService.deleteRule(req.params.id, req.user.userId);
