@@ -169,7 +169,7 @@ const startServer = async () => {
     await SessionService.loadSessions();
     await seedAdmin();
 
-    httpServer.listen(PORT, () => {
+    httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`Backend Server running on port ${PORT}`);
     });
 };
