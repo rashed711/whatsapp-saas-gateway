@@ -530,3 +530,21 @@ io.on('connection', (socket) => {
         await SessionService.logoutSession(sessionId, userId, socket, io);
     });
 });
+
+// ---------------------------------------------------------
+// KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
+// ---------------------------------------------------------
+const PORT = process.env.PORT || 3050;
+const SELF_URL = process.env.VITE_API_URL || `http://localhost:${PORT}`;
+
+// Ping self every 10 minutes (600,000 ms)
+setInterval(() => {
+    // Only valid URL
+    if (SELF_URL.startsWith('http')) {
+        console.log(`[KeepAlive] Pinging ${SELF_URL} to assume uptime...`);
+        fetch(SELF_URL)
+            .then(res => console.log(`[KeepAlive] Ping Status: ${res.status} ${res.statusText}`))
+            .catch(err => console.error(`[KeepAlive] Ping Failed: ${err.message}`));
+    }
+}, 10 * 60 * 1000);
+// ---------------------------------------------------------

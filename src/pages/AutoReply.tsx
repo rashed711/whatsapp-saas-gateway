@@ -163,40 +163,40 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
                 </button>
             </div>
 
-            {/* Rules Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Rules Grid - Compact Design */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                 {rules.map((rule) => (
-                    <div key={rule._id} className="bg-gray-800/50 backdrop-blur border border-gray-700/50 p-5 rounded-xl hover:border-emerald-500/30 transition-all group">
-                        <div className="flex justify-between items-start mb-3">
-                            <div className="flex flex-col gap-2">
-                                <div className="bg-gray-900/50 px-3 py-1 rounded text-sm text-emerald-400 font-mono flex items-center gap-2 w-fit">
-                                    <Terminal className="w-3 h-3" />
-                                    {rule.matchType === 'exact' ? 'Exact Match' : 'Contains'}
+                    <div key={rule._id} className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-lg p-3 hover:border-emerald-500/40 transition-all group shadow-sm flex flex-col justify-between h-full">
+
+                        <div className="flex justify-between items-start mb-2">
+                            <div className="flex flex-col gap-1.5 w-full">
+                                <div className="flex items-center justify-between w-full">
+                                    <h3 className="text-white font-medium truncate flex-1" title={rule.keyword}>
+                                        <span className="text-emerald-500 text-sm font-bold mr-1">#</span>
+                                        {rule.keyword}
+                                    </h3>
+                                    <button
+                                        onClick={() => handleDelete(rule._id)}
+                                        className="text-gray-500 hover:text-red-400 p-1 rounded-full hover:bg-white/5 transition-colors"
+                                    >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
                                 </div>
-                                <div className={`px-2 py-0.5 rounded text-xs flex items-center gap-1 w-fit border ${getSessionStatusColor(rule.sessionId)}`}>
-                                    <Smartphone className="w-3 h-3" />
-                                    {getSessionName(rule.sessionId)}
+
+                                <div className="flex flex-wrap gap-1.5">
+                                    <span className="bg-gray-700/50 text-gray-400 text-[10px] px-1.5 py-0.5 rounded border border-gray-600/30">
+                                        {rule.matchType === 'exact' ? 'Exact' : 'Contains'}
+                                    </span>
+                                    <div className={`text-[10px] px-1.5 py-0.5 rounded border flex items-center gap-1 max-w-full truncate ${getSessionStatusColor(rule.sessionId)}`}>
+                                        <Smartphone className="w-2.5 h-2.5" />
+                                        <span className="truncate">{getSessionName(rule.sessionId)}</span>
+                                    </div>
                                 </div>
                             </div>
-                            <button
-                                onClick={() => handleDelete(rule._id)}
-                                className="text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                            >
-                                <Trash2 className="w-4 h-4" />
-                            </button>
                         </div>
 
-                        <div className="mb-4">
-                            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">When user sends:</div>
-                            <div className="font-bold text-white text-lg">"{rule.keyword}"</div>
-                        </div>
-
-                        <div className="bg-gray-900/30 p-3 rounded-lg border border-gray-700/30">
-                            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">
-                                <MessageSquare className="w-3 h-3" />
-                                Reply with:
-                            </div>
-                            <p className="text-gray-300 text-sm whitespace-pre-wrap">{rule.response}</p>
+                        <div className="mt-2 text-xs text-gray-400 bg-gray-900/40 p-2 rounded border border-gray-700/20">
+                            <div className="line-clamp-2" title={rule.response}>{rule.response}</div>
                         </div>
                     </div>
                 ))}
