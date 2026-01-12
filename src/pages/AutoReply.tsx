@@ -1,27 +1,48 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Bot, MessageSquare, Terminal } from 'lucide-react';
+import { Plus, Trash2, Bot, MessageSquare, Terminal, Smartphone } from 'lucide-react';
 
 interface AutoReplyRule {
     _id: string;
+    sessionId?: string;
     keyword: string;
     response: string;
     matchType: 'exact' | 'contains';
     isActive: boolean;
 }
 
-const AutoReply = () => {
+interface AutoReplyProps {
+    socket: any;
+}
+
+const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
     const [rules, setRules] = useState<AutoReplyRule[]>([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
+
+    // Sessions State
+    const [sessions, setSessions] = useState<any[]>([]);
 
     // Form State
     const [keyword, setKeyword] = useState('');
     const [response, setResponse] = useState('');
     const [matchType, setMatchType] = useState<'exact' | 'contains'>('exact');
+    const [selectedSessionId, setSelectedSessionId] = useState<string>(''); // '' means All
 
     useEffect(() => {
         fetchRules();
-    }, []);
+
+        // Fetch sessions for dropdown
+        if (socket && socket.connected) {
+            socket.emit('list-sessions');
+            socket.on('sessions-list', (data: any[]) => {
+                setSessions(data);
+            });
+        }
+
+        return () => {
+            if (socket) socket.off('sessions-list');
+        };
+    }, [socket]);
 
     const fetchRules = async () => {
         try {
@@ -50,13 +71,19 @@ const AutoReply = () => {
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${token}`
                 },
-                body: JSON.stringify({ keyword, response, matchType })
+                body: JSON.stringify({
+                    keyword,
+                    response,
+                    matchType,
+                    sessionId: selectedSessionId || null
+                })
             });
 
             if (res.ok) {
                 setShowModal(false);
                 setKeyword('');
                 setResponse('');
+                setSelectedSessionId('');
                 fetchRules();
             }
         } catch (error) {
@@ -79,6 +106,12 @@ const AutoReply = () => {
         } catch (error) {
             console.error('Failed to delete rule', error);
         }
+    };
+
+    const getSessionName = (id?: string) => {
+        if (!id) return 'All Devices';
+        const session = sessions.find(s => s.id === id);
+        return session ? session.name : 'Unknown Device';
     };
 
     return (
@@ -105,9 +138,15 @@ const AutoReply = () => {
                 {rules.map((rule) => (
                     <div key={rule._id} className="bg-gray-800/50 backdrop-blur border border-gray-700/50 p-5 rounded-xl hover:border-emerald-500/30 transition-all group">
                         <div className="flex justify-between items-start mb-3">
-                            <div className="bg-gray-900/50 px-3 py-1 rounded text-sm text-emerald-400 font-mono flex items-center gap-2">
-                                <Terminal className="w-3 h-3" />
-                                {rule.matchType === 'exact' ? 'Exact Match' : 'Contains'}
+                            <div className="flex flex-col gap-2">
+                                <div className="bg-gray-900/50 px-3 py-1 rounded text-sm text-emerald-400 font-mono flex items-center gap-2 w-fit">
+                                    <Terminal className="w-3 h-3" />
+                                    {rule.matchType === 'exact' ? 'Exact Match' : 'Contains'}
+                                </div>
+                                <div className={`px-2 py-0.5 rounded text-xs flex items-center gap-1 w-fit ${rule.sessionId ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-700 text-gray-400'}`}>
+                                    <Smartphone className="w-3 h-3" />
+                                    {getSessionName(rule.sessionId)}
+                                </div>
                             </div>
                             <button
                                 onClick={() => handleDelete(rule._id)}
@@ -146,6 +185,20 @@ const AutoReply = () => {
                     <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-6 shadow-2xl">
                         <h2 className="text-xl font-bold text-white mb-4">Create Auto-Reply Rule</h2>
                         <form onSubmit={handleCreate} className="space-y-4">
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">For Device</label>
+                                <select
+                                    value={selectedSessionId}
+                                    onChange={(e) => setSelectedSessionId(e.target.value)}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:border-emerald-500 focus:outline-none"
+                                >
+                                    <option value="">All Devices (Global Rule)</option>
+                                    {sessions.map(s => (
+                                        <option key={s.id} value={s.id}>{s.name} ({s.status})</option>
+                                    ))}
+                                </select>
+                            </div>
+
                             <div>
                                 <label className="block text-sm text-gray-400 mb-1">Keyword</label>
                                 <input

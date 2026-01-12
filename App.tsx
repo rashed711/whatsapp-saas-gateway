@@ -110,7 +110,7 @@ const App = () => {
           <Route path="/" element={<Dashboard socket={socket} />} />
           <Route path="/devices" element={<Devices socket={socket} />} />
           <Route path="/campaigns" element={<Campaigns socket={socket} />} />
-          <Route path="/autoreply" element={<AutoReply />} />
+          <Route path="/autoreply" element={<AutoReply socket={socket} />} />
           <Route path="/users" element={<Users />} />
         </Route>
 

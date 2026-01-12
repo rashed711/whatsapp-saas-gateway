@@ -459,11 +459,12 @@ app.get('/api/autoreply', authenticateToken, async (req: any, res) => {
 
 app.post('/api/autoreply', authenticateToken, async (req: any, res) => {
     try {
-        const { keyword, response, matchType } = req.body;
+        const { keyword, response, matchType, sessionId } = req.body;
         if (!keyword || !response) return res.status(400).json({ error: 'Missing keyword or response' });
 
         const rule = await AutoReplyService.createRule({
             userId: req.user.userId,
+            sessionId: sessionId || undefined, // undefined means "All Devices"
             keyword,
             response,
             matchType: matchType || 'exact',
