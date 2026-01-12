@@ -412,24 +412,19 @@ app.get('/api/autoreply', authenticateToken, async (req: any, res) => {
     }
 });
 
+// Create Rule
 app.post('/api/autoreply', authenticateToken, async (req: any, res) => {
-    console.log(`[POST] /api/autoreply - User: ${req.user.userId}`, req.body);
-    try {
-        const { keyword, response, matchType, sessionId } = req.body;
-        if (!keyword || !response) return res.status(400).json({ error: 'Missing keyword or response' });
-
-        const rule = await AutoReplyService.createRule({
-            userId: req.user.userId,
-            sessionId: sessionId || undefined, // undefined means "All Devices"
+    userId: req.user.userId,
+        sessionId: sessionId || undefined, // undefined means "All Devices"
             keyword,
             response,
             matchType: matchType || 'exact',
-            isActive: true
-        });
-        res.json(rule);
+                isActive: true
+});
+res.json(rule);
     } catch (e) {
-        res.status(500).json({ error: 'Failed to create rule' });
-    }
+    res.status(500).json({ error: 'Failed to create rule' });
+}
 });
 
 app.delete('/api/autoreply/:id', authenticateToken, async (req: any, res) => {
@@ -534,7 +529,6 @@ io.on('connection', (socket) => {
 // ---------------------------------------------------------
 // KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
 // ---------------------------------------------------------
-const PORT = process.env.PORT || 3050;
 const SELF_URL = process.env.VITE_API_URL || `http://localhost:${PORT}`;
 
 // Ping self every 10 minutes (600,000 ms)

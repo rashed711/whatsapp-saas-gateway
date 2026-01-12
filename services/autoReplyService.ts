@@ -33,15 +33,19 @@ export class AutoReplyService {
         return true;
     }
 
+    // Update rule
+    static async updateRule(id: string, userId: string, data: Partial<IAutoReply>): Promise<IAutoReply | null> {
+        return await storage.saveItem('autoreplies', { ...data, _id: id, userId });
+    }
+
     /**
      * Core Logic: Check message against rules and return response if match found.
+     * Supports multiple keywords separated by specific delimiters (comma).
      */
     static async getResponse(userId: string, messageContent: string, sessionId?: string): Promise<string | null> {
         if (!messageContent) return null;
 
         // 1. Fetch active rules for this user
-        // Optimization: In a real DB, we would query { userId, isActive: true } directly.
-        // For file storage, we filter in memory.
         const allRules: IAutoReply[] = await storage.getItems('autoreplies', { userId });
         const activeRules = allRules.filter(r => r.isActive);
         console.log(`[AutoReplyService] Found ${activeRules.length} active rules for user ${userId}. Checking against content: "${messageContent}"`);
@@ -52,15 +56,19 @@ export class AutoReplyService {
             // Optional: Check session binding
             if (rule.sessionId && rule.sessionId !== sessionId) continue;
 
-            const keywordLower = rule.keyword.toLowerCase().trim();
+            // Support multiple keywords split by comma
+            // e.g. "hi, hello, welcome" -> ["hi", "hello", "welcome"]
+            const keywords = rule.keyword.split(',').map(k => k.trim().toLowerCase()).filter(k => k.length > 0);
 
-            if (rule.matchType === 'exact') {
-                if (contentLower === keywordLower) {
-                    return rule.response;
-                }
-            } else if (rule.matchType === 'contains') {
-                if (contentLower.includes(keywordLower)) {
-                    return rule.response;
+            for (const kw of keywords) {
+                if (rule.matchType === 'exact') {
+                    if (contentLower === kw) {
+                        return rule.response;
+                    }
+                } else if (rule.matchType === 'contains') {
+                    if (contentLower.includes(kw)) {
+                        return rule.response;
+                    }
                 }
             }
         }

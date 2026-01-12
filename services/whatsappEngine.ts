@@ -187,8 +187,20 @@ export class WhatsAppEngine {
                 if (replyText) {
                   console.log(`[AutoReply] Match found! Replying to ${remoteJid}: "${replyText}"`);
 
-                  // Simulate natural delay (1-3 seconds)
-                  await new Promise(r => setTimeout(r, Math.random() * 2000 + 1000));
+                  // Simulate human behavior to avoid bans:
+                  // 1. Mark as read (optional but good)
+                  // await this.sock.readMessages([msg.key]); 
+                  // 2. Simulate typing (presence update)
+                  await this.sock.sendPresenceUpdate('composing', remoteJid);
+
+                  // 3. Variable Delay (Human-like)
+                  // Random delay between 3 seconds and 8 seconds
+                  const humanDelay = Math.floor(Math.random() * 5000) + 3000;
+                  console.log(`[AutoReply] Waiting ${humanDelay}ms to simulate typing...`);
+                  await new Promise(r => setTimeout(r, humanDelay));
+
+                  // 4. Stop typing
+                  await this.sock.sendPresenceUpdate('paused', remoteJid);
 
                   // Send Reply
                   await this.sock.sendMessage(remoteJid, { text: replyText }, { quoted: msg });
