@@ -65,7 +65,9 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
         e.preventDefault();
         try {
             const token = localStorage.getItem('token');
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/autoreply`, {
+            console.log('Creating rule...', { keyword, response, matchType, sessionId: selectedSessionId });
+
+            const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3050'}/api/autoreply`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -75,7 +77,7 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
                     keyword,
                     response,
                     matchType,
-                    sessionId: selectedSessionId || null
+                    sessionId: selectedSessionId || undefined
                 })
             });
 
@@ -85,9 +87,15 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
                 setResponse('');
                 setSelectedSessionId('');
                 fetchRules();
+                alert('Rule created successfully!');
+            } else {
+                const errData = await res.json();
+                console.error('Server error:', errData);
+                alert(`Error: ${errData.error || 'Failed to create rule'}`);
             }
         } catch (error) {
             console.error('Failed to create rule', error);
+            alert('Failed to connect to server');
         }
     };
 
