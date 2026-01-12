@@ -1,4 +1,4 @@
-import { WhatsAppEngine } from './whatsappEngine';
+import { WhatsAppEngine } from './whatsappEngine.js';
 
 interface ActiveSession {
     id: string;
