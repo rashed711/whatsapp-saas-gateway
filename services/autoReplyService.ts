@@ -95,8 +95,9 @@ export class AutoReplyService {
     /**
      * Core Logic: Check message against rules and return response if match found.
      * Supports multiple keywords + Fuzzy Matching for Arabic.
+     * Returns the FULL rule object to support media types.
      */
-    static async getResponse(userId: string, messageContent: string, sessionId?: string): Promise<string | null> {
+    static async getResponse(userId: string, messageContent: string, sessionId?: string): Promise<IAutoReply | null> {
         if (!messageContent) return null;
 
         const allRules: IAutoReply[] = await storage.getItems('autoreplies', { userId });
@@ -113,12 +114,12 @@ export class AutoReplyService {
                 if (rule.matchType === 'exact') {
                     // Strict Exact Match
                     if (contentLower === kw.toLowerCase() || this.normalizeText(contentLower) === this.normalizeText(kw)) {
-                        return rule.response;
+                        return rule;
                     }
                 } else if (rule.matchType === 'contains') {
                     // Smart Fuzzy Match
                     if (this.fuzzyContains(messageContent, kw)) {
-                        return rule.response;
+                        return rule;
                     }
                 }
             }

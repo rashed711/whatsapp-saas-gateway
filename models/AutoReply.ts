@@ -6,7 +6,10 @@ export interface IAutoReply {
     sessionId?: string; // Optional: bind to specific session
     keyword: string;
     matchType: 'exact' | 'contains';
-    response: string;
+    response: string; // Used as text content or caption
+    replyType?: 'text' | 'image' | 'video' | 'audio' | 'document';
+    mediaUrl?: string;
+    fileName?: string; // For documents
     isActive: boolean;
     createdAt?: Date;
 }
@@ -16,7 +19,10 @@ const AutoReplySchema = new Schema({
     sessionId: { type: String, required: false }, // Optional
     keyword: { type: String, required: true },
     matchType: { type: String, enum: ['exact', 'contains'], default: 'exact' },
-    response: { type: String, required: true },
+    response: { type: String, required: true }, // Main text or Caption
+    replyType: { type: String, enum: ['text', 'image', 'video', 'audio', 'document'], default: 'text' },
+    mediaUrl: { type: String },
+    fileName: { type: String },
     isActive: { type: Boolean, default: true },
     createdAt: { type: Date, default: Date.now }
 });

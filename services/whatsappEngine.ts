@@ -182,28 +182,60 @@ export class WhatsAppEngine {
 
               if (textContent) {
                 console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
-                const replyText = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
+                const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
 
-                if (replyText) {
-                  console.log(`[AutoReply] Match found! Replying to ${remoteJid}: "${replyText}"`);
+                if (matchedRule) {
+                  console.log(`[AutoReply] Match found! RuleID: ${matchedRule._id} | Type: ${matchedRule.replyType || 'text'}`);
 
-                  // Simulate human behavior to avoid bans:
-                  // 1. Mark as read (optional but good)
-                  // await this.sock.readMessages([msg.key]); 
-                  // 2. Simulate typing (presence update)
+                  // Simulate human behavior
                   await this.sock.sendPresenceUpdate('composing', remoteJid);
-
-                  // 3. Variable Delay (Human-like)
-                  // Random delay between 3 seconds and 8 seconds
                   const humanDelay = Math.floor(Math.random() * 5000) + 3000;
-                  console.log(`[AutoReply] Waiting ${humanDelay}ms to simulate typing...`);
+                  console.log(`[AutoReply] Waiting ${humanDelay}ms...`);
                   await new Promise(r => setTimeout(r, humanDelay));
-
-                  // 4. Stop typing
                   await this.sock.sendPresenceUpdate('paused', remoteJid);
 
-                  // Send Reply
-                  await this.sock.sendMessage(remoteJid, { text: replyText }, { quoted: msg });
+                  // Send Reply based on Type
+                  const responseText = matchedRule.response; // Caption or Text
+
+                  try {
+                    if (matchedRule.replyType === 'image' && matchedRule.mediaUrl) {
+                      await this.sock.sendMessage(remoteJid, {
+                        image: { url: matchedRule.mediaUrl },
+                        caption: responseText
+                      }, { quoted: msg });
+
+                    } else if (matchedRule.replyType === 'video' && matchedRule.mediaUrl) {
+                      await this.sock.sendMessage(remoteJid, {
+                        video: { url: matchedRule.mediaUrl },
+                        caption: responseText
+                      }, { quoted: msg });
+
+                    } else if (matchedRule.replyType === 'document' && matchedRule.mediaUrl) {
+                      await this.sock.sendMessage(remoteJid, {
+                        document: { url: matchedRule.mediaUrl },
+                        mimetype: 'application/pdf', // Default, maybe detect from extension later
+                        fileName: matchedRule.fileName || 'file.pdf',
+                        caption: responseText
+                      }, { quoted: msg });
+
+                    } else if (matchedRule.replyType === 'audio' && matchedRule.mediaUrl) {
+                      await this.sock.sendMessage(remoteJid, {
+                        audio: { url: matchedRule.mediaUrl },
+                        ptt: true // Send as Voice Note
+                      }, { quoted: msg });
+
+                    } else {
+                      // Default: Text
+                      await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
+                    }
+                    console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
+
+                  } catch (sendErr) {
+                    console.error('[AutoReply] Failed to send response:', sendErr);
+                    // Fallback to text if media fails?
+                    await this.sock.sendMessage(remoteJid, { text: `[Error sending media] ${responseText}` }, { quoted: msg });
+                  }
+
                 } else {
                   console.log(`[AutoReply] No match found for: "${textContent}"`);
                 }
