@@ -24,6 +24,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json()); // Middleware to parse JSON
 
+app.get('/', (req, res) => res.send('WhatsApp Gateway API is Running 🚀'));
+
 // CORS Middleware
 // CORS Middleware
 app.use(cors({

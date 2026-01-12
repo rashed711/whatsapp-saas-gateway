@@ -47,7 +47,8 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
     const fetchRules = async () => {
         try {
             const token = localStorage.getItem('token');
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/autoreply`, {
+            const baseUrl = import.meta.env.VITE_API_URL.replace(/\/$/, '');
+            const res = await fetch(`${baseUrl}/api/autoreply`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (res.ok) {
