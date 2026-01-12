@@ -21,6 +21,8 @@ dotenv.config({ path: '.env.local' });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const app = express();
+
 // --- Global Middleware ---
 app.use(express.json({ limit: '50mb' })); // Combined Body Parser (JSON)
 app.use(express.urlencoded({ extended: true, limit: '50mb' })); // Body Parser (URL Encoded)
