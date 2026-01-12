@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
 const authStateSchema = new mongoose.Schema({
-    sessionId: { type: String, required: true, index: true },
-    key: { type: String, required: true },
-    value: { type: mongoose.Schema.Types.Mixed, required: true } // Stores the JSON/Buffer data
-});
-// Composite unique index ensures we don't duplicate keys for a session
+    sessionId: { type: String, required: true },
+    key: { type: String, required: true }, // 'creds' or 'type-id'
+    data: { type: mongoose.Schema.Types.Mixed, required: true }
+}, { timestamps: true });
+// Compound index to ensure unique key per session
 authStateSchema.index({ sessionId: 1, key: 1 }, { unique: true });
-export const AuthStateModel = mongoose.model('AuthState', authStateSchema);
+export const AuthState = mongoose.model('AuthState', authStateSchema);

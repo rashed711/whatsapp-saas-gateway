@@ -161,7 +161,7 @@ const seedAdmin = async () => {
     }
 };
 
-const PORT = 3050;
+const PORT = process.env.PORT || 3050;
 
 // Initialize & Start Server
 const startServer = async () => {

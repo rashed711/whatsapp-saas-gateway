@@ -1,5 +1,5 @@
 import { BufferJSON, initAuthCreds } from '@whiskeysockets/baileys';
-import { AuthState } from './models/index.js';
+import { AuthState } from '../models/index.js';
 export const useMongoDBAuthState = async (sessionId) => {
     // Helper to read data (handling BufferJSON parsing if needed)
     const readData = async (key) => {
