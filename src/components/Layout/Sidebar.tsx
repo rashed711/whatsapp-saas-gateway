@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Smartphone, Send, Key, LogOut, X, Users, MessageSquare } from 'lucide-react';
+import { LayoutDashboard, Send, Users, Settings, LogOut, FileText, Smartphone, Bot, X } from 'lucide-react';
 
 interface SidebarProps {
     onLogout: () => void;

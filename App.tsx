@@ -7,6 +7,7 @@ import Users from './src/pages/Users';
 import Dashboard from './src/pages/Dashboard';
 import Devices from './src/pages/Devices';
 import Campaigns from './src/pages/Campaigns';
+import AutoReply from './src/pages/AutoReply';
 import { Menu } from 'lucide-react';
 
 const App = () => {
@@ -109,6 +110,7 @@ const App = () => {
           <Route path="/" element={<Dashboard socket={socket} />} />
           <Route path="/devices" element={<Devices socket={socket} />} />
           <Route path="/campaigns" element={<Campaigns socket={socket} />} />
+          <Route path="/autoreply" element={<AutoReply />} />
           <Route path="/users" element={<Users />} />
         </Route>
 

@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { storage } from './storage.js';
 import { useMongoDBAuthState } from './mongoAuth.js';
+import { AutoReplyService } from './autoReplyService.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export class WhatsAppEngine {
@@ -107,6 +108,25 @@ export class WhatsAppEngine {
                         if (!remoteJid || remoteJid.includes('@lid') || remoteJid.includes('@broadcast') || !remoteJid.includes('@s.whatsapp.net'))
                             continue;
                         const pushName = msg.pushName;
+                        // --- Auto Reply Logic ---
+                        try {
+                            // Extract text content (support conversation or extendedTextMessage)
+                            const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                            if (textContent) {
+                                const replyText = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
+                                if (replyText) {
+                                    console.log(`[AutoReply] Matched rule for ${remoteJid}: "${textContent}" -> "${replyText}"`);
+                                    // Simulate natural delay (1-3 seconds)
+                                    await new Promise(r => setTimeout(r, Math.random() * 2000 + 1000));
+                                    // Send Reply
+                                    await this.sock.sendMessage(remoteJid, { text: replyText }, { quoted: msg });
+                                }
+                            }
+                        }
+                        catch (err) {
+                            console.error('[AutoReply] Error processing message:', err);
+                        }
+                        // ------------------------
                         contactsToUpdate.push({
                             sessionId: this.sessionId,
                             id: remoteJid,

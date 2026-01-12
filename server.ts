@@ -8,6 +8,7 @@ import { WhatsAppEngine } from './services/whatsappEngine.js';
 import { storage } from './services/storage.js';
 import { CampaignService } from './services/campaignService.js';
 import { SessionService } from './services/sessionService.js';
+import { AutoReplyService } from './services/autoReplyService.js';
 import { IUser } from './models/User.js';
 import { ISession } from './models/Session.js';
 import dotenv from 'dotenv';
@@ -442,6 +443,44 @@ app.get('/api/sessions/:sessionId/messages', authenticateToken, async (req: any,
     } catch (error) {
         console.error('Failed to fetch messages:', error);
         res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+});
+
+// --- Auto Reply Routes ---
+
+app.get('/api/autoreply', authenticateToken, async (req: any, res) => {
+    try {
+        const rules = await AutoReplyService.getRules(req.user.userId);
+        res.json(rules);
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to fetch rules' });
+    }
+});
+
+app.post('/api/autoreply', authenticateToken, async (req: any, res) => {
+    try {
+        const { keyword, response, matchType } = req.body;
+        if (!keyword || !response) return res.status(400).json({ error: 'Missing keyword or response' });
+
+        const rule = await AutoReplyService.createRule({
+            userId: req.user.userId,
+            keyword,
+            response,
+            matchType: matchType || 'exact',
+            isActive: true
+        });
+        res.json(rule);
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to create rule' });
+    }
+});
+
+app.delete('/api/autoreply/:id', authenticateToken, async (req: any, res) => {
+    try {
+        await AutoReplyService.deleteRule(req.params.id, req.user.userId);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to delete rule' });
     }
 });
 
