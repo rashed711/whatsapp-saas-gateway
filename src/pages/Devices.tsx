@@ -153,7 +153,8 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
 
         try {
             const token = localStorage.getItem('token');
-            const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3050'}/api/sessions/${selectedSessionWebhook.id}/webhook`, {
+            const baseUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || `${window.location.protocol}//${window.location.hostname}:3050`;
+            const response = await fetch(`${baseUrl}/api/sessions/${selectedSessionWebhook.id}/webhook`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -174,9 +175,9 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                 console.error('Save failed:', data);
                 alert('فشل حفظ الرابط: ' + (data.details || data.error || 'خطأ غير معروف'));
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error(error);
-            alert('حدث خطأ أثناء الحفظ');
+            alert('حدث خطأ أثناء الحفظ: ' + (error.message || error));
         }
     };
 
