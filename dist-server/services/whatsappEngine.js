@@ -151,8 +151,8 @@ export class WhatsAppEngine {
             });
             // 2. Fallback: Parse Incoming Messages to extract sender number/name
             this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
-                console.log(`[Engine] Message Event: type=${type}, count=${messages.length}`);
                 if (type === 'notify' || type === 'append') {
+                    console.log(`[Engine] Rx ${messages.length} msgs. Type: ${type}`);
                     const contactsToUpdate = [];
                     for (const msg of messages) {
                         // console.log(`[Engine] Processing Msg: ...`);
