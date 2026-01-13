@@ -8,8 +8,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { storage } from './storage.js';
-import { useMongoDBAuthState } from './mongoAuth.js';
 import { AutoReplyService } from './autoReplyService.js';
+import { useMongoDBAuthState } from './mongoAuth.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export class WhatsAppEngine {
@@ -54,6 +54,38 @@ export class WhatsAppEngine {
                 }
                 if (connection === 'open') {
                     console.log(`[Engine] Session ${this.sessionId} is now CONNECTED.`);
+                    // -----------------------------------------------------
+                    // UNIQUE SESSION ENFORCEMENT (One Number Policy)
+                    // -----------------------------------------------------
+                    const userJid = this.sock?.user?.id;
+                    const phoneNumber = userJid ? userJid.split(':')[0] : null;
+                    if (phoneNumber) {
+                        console.log(`[Engine] Verifying uniqueness for number: ${phoneNumber}`);
+                        // 1. Update this session with the phone number
+                        await storage.saveItem('sessions', {
+                            id: this.sessionId,
+                            userId: this.userId, // Ensure userId is preserved
+                            phoneNumber: phoneNumber,
+                            status: 'CONNECTED',
+                            updatedAt: new Date()
+                        });
+                        // 2. Check for OTHER sessions with the same phone number
+                        const allSessions = await storage.getItems('sessions', { phoneNumber });
+                        // Filter out CURRENT session
+                        const duplicates = allSessions.filter(s => s.id !== this.sessionId && s.status !== 'TERMINATED');
+                        if (duplicates.length > 0) {
+                            console.warn(`[Engine] SECURITY ALERT: Found ${duplicates.length} duplicate sessions for number ${phoneNumber}. Terminating them.`);
+                            for (const dup of duplicates) {
+                                console.log(`[Engine] Killing duplicate session: ${dup.id}`);
+                                // Mark as terminated in DB
+                                await storage.saveItem('sessions', { id: dup.id, status: 'TERMINATED' });
+                                // Ideally, we would emit an event to server.ts to kill the specific engine instance,
+                                // but marking it TERMINATED in DB prevents it from being resumed on restart.
+                                // The 440 conflict from WhatsApp will eventually disconnect the zombie if it's running.
+                            }
+                        }
+                    }
+                    // -----------------------------------------------------
                     this.status = 'CONNECTED';
                     this.retryCount = 0; // Reset retry count
                     onConnected();
@@ -99,27 +131,105 @@ export class WhatsAppEngine {
             });
             // 2. Fallback: Parse Incoming Messages to extract sender number/name
             this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                console.log(`[Engine] Message Event: type=${type}, count=${messages.length}`);
                 if (type === 'notify' || type === 'append') {
                     const contactsToUpdate = [];
                     for (const msg of messages) {
-                        if (msg.key.fromMe)
+                        console.log(`[Engine] Processing Msg: fromMe=${msg.key.fromMe}, remoteJid=${msg.key.remoteJid}, type=${Object.keys(msg.message || {})}`);
+                        if (msg.key.fromMe) {
+                            // --- Human Takeover Logic ---
+                            // If user replies manually, mute the bot for this chat
+                            const targetJid = msg.key.remoteJid;
+                            if (targetJid && !targetJid.includes('@broadcast') && !targetJid.includes('@g.us')) {
+                                // Check for "Unmute" command
+                                const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                                if (text && (text.toLowerCase() === '#bot' || text.toLowerCase() === '#unmute')) {
+                                    console.log(`[Human Takeover] User re-enabled bot for ${targetJid}`);
+                                    await storage.deleteItem('muted_chats', { sessionId: this.sessionId, jid: targetJid });
+                                }
+                                else {
+                                    console.log(`[Human Takeover] Manual reply detected. Muting bot for ${targetJid}`);
+                                    await storage.saveItem('muted_chats', {
+                                        sessionId: this.sessionId,
+                                        jid: targetJid,
+                                        mutedAt: new Date(),
+                                        userId: this.userId
+                                    });
+                                }
+                            }
                             continue;
+                        }
                         const remoteJid = msg.key.remoteJid;
-                        if (!remoteJid || remoteJid.includes('@lid') || remoteJid.includes('@broadcast') || !remoteJid.includes('@s.whatsapp.net'))
+                        // Allow @s.whatsapp.net AND @lid (Lightning IDs)
+                        if (!remoteJid || remoteJid.includes('@broadcast') || (!remoteJid.includes('@s.whatsapp.net') && !remoteJid.includes('@lid')))
                             continue;
                         const pushName = msg.pushName;
                         // --- Auto Reply Logic ---
                         try {
-                            // Extract text content (support conversation or extendedTextMessage)
-                            const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-                            if (textContent) {
-                                const replyText = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
-                                if (replyText) {
-                                    console.log(`[AutoReply] Matched rule for ${remoteJid}: "${textContent}" -> "${replyText}"`);
-                                    // Simulate natural delay (1-3 seconds)
-                                    await new Promise(r => setTimeout(r, Math.random() * 2000 + 1000));
-                                    // Send Reply
-                                    await this.sock.sendMessage(remoteJid, { text: replyText }, { quoted: msg });
+                            // 0. Check if Chat is Muted (Human Takeover)
+                            const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, jid: remoteJid });
+                            if (isMuted) {
+                                // Optional: Log that we skipped
+                                // console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Human Mode.`);
+                            }
+                            else {
+                                // Extract text content (support conversation or extendedTextMessage)
+                                const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                                if (textContent) {
+                                    console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
+                                    const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
+                                    if (matchedRule) {
+                                        console.log(`[AutoReply] Match found! RuleID: ${matchedRule._id} | Type: ${matchedRule.replyType || 'text'}`);
+                                        // Simulate human behavior
+                                        await this.sock.sendPresenceUpdate('composing', remoteJid);
+                                        const humanDelay = Math.floor(Math.random() * 5000) + 3000;
+                                        console.log(`[AutoReply] Waiting ${humanDelay}ms...`);
+                                        await new Promise(r => setTimeout(r, humanDelay));
+                                        await this.sock.sendPresenceUpdate('paused', remoteJid);
+                                        // Send Reply based on Type
+                                        const responseText = matchedRule.response; // Caption or Text
+                                        try {
+                                            if (matchedRule.replyType === 'image' && matchedRule.mediaUrl) {
+                                                await this.sock.sendMessage(remoteJid, {
+                                                    image: { url: matchedRule.mediaUrl },
+                                                    caption: responseText
+                                                }, { quoted: msg });
+                                            }
+                                            else if (matchedRule.replyType === 'video' && matchedRule.mediaUrl) {
+                                                await this.sock.sendMessage(remoteJid, {
+                                                    video: { url: matchedRule.mediaUrl },
+                                                    caption: responseText
+                                                }, { quoted: msg });
+                                            }
+                                            else if (matchedRule.replyType === 'document' && matchedRule.mediaUrl) {
+                                                await this.sock.sendMessage(remoteJid, {
+                                                    document: { url: matchedRule.mediaUrl },
+                                                    mimetype: 'application/pdf', // Default, maybe detect from extension later
+                                                    fileName: matchedRule.fileName || 'file.pdf',
+                                                    caption: responseText
+                                                }, { quoted: msg });
+                                            }
+                                            else if (matchedRule.replyType === 'audio' && matchedRule.mediaUrl) {
+                                                await this.sock.sendMessage(remoteJid, {
+                                                    audio: { url: matchedRule.mediaUrl },
+                                                    ptt: true // Send as Voice Note
+                                                }, { quoted: msg });
+                                            }
+                                            else {
+                                                // Default: Text
+                                                await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
+                                            }
+                                            console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
+                                        }
+                                        catch (sendErr) {
+                                            console.error('[AutoReply] Failed to send response:', sendErr);
+                                            // Fallback to text if media fails?
+                                            await this.sock.sendMessage(remoteJid, { text: `[Error sending media] ${responseText}` }, { quoted: msg });
+                                        }
+                                    }
+                                    else {
+                                        console.log(`[AutoReply] No match found for: "${textContent}"`);
+                                    }
                                 }
                             }
                         }

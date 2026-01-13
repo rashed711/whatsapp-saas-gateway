@@ -552,18 +552,21 @@ io.on('connection', (socket) => {
 // KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
 // ---------------------------------------------------------
 // ---------------------------------------------------------
+// ---------------------------------------------------------
 // KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
 // ---------------------------------------------------------
-// Use proper public URL from env, or fallback to localhost (which might not prevent sleep on Render)
-const SELF_URL = process.env.VITE_API_URL || `http://localhost:${PORT}`;
+// Render automatically sets RENDER_EXTERNAL_URL (e.g., https://my-app.onrender.com)
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.VITE_API_URL || `http://localhost:${PORT}`;
 
 // Ping self every 5 minutes (300,000 ms) to stay active
 // Render Free Tier sleeps after 15 mins of inactivity.
+// We must ping the EXTERNAL URL to count as valid traffic.
 setInterval(() => {
     const pingUrl = `${SELF_URL}/api/health-check`;
+    console.log(`[KeepAlive] Pinging ${pingUrl} to prevent sleep...`);
+
     // Only attempt if it looks like a valid URL
     if (pingUrl.startsWith('http')) {
-        console.log(`[KeepAlive] Pinging ${pingUrl} to prevent sleep...`);
         fetch(pingUrl)
             .then(res => {
                 if (res.ok) console.log(`[KeepAlive] Ping Success: ${res.status}`);
@@ -571,7 +574,7 @@ setInterval(() => {
             })
             .catch(err => console.error(`[KeepAlive] Ping Failed: ${err.message}`));
     }
-}, 5 * 60 * 1000); 
+}, 5 * 60 * 1000);
 
 // Dedicated Health Check Route
 app.get('/api/health-check', (req, res) => {

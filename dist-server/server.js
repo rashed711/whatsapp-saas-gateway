@@ -16,68 +16,23 @@ dotenv.config({ path: '.env.local' });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
-app.use(express.json()); // Middleware to parse JSON
-// CORS Middleware
-// CORS Middleware
-app.use(cors());
+// --- Global Middleware ---
+app.use(express.json({ limit: '50mb' })); // Combined Body Parser (JSON)
+app.use(express.urlencoded({ extended: true, limit: '50mb' })); // Body Parser (URL Encoded)
+app.get('/', (req, res) => res.send('WhatsApp Gateway API is Running 🚀 (V: 1.0.3)')); // Single Root Route
+// CORS Middleware (Single Source of Truth)
+app.use(cors({
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+}));
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-    maxHttpBufferSize: 1e7, // 10 MB
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    }
+    maxHttpBufferSize: 1e7,
+    cors: { origin: "*", methods: ["GET", "POST"] }
 });
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-it';
-// Stats (Mock/Simple In-Memory)
-let stats = {
-    messagesToday: 0,
-    startTime: Date.now()
-};
-app.get('/stats', async (req, res) => {
-    const uptimeSeconds = Math.floor((Date.now() - stats.startTime) / 1000);
-    const uptimeStr = uptimeSeconds > 3600
-        ? `${Math.floor(uptimeSeconds / 3600)}h ${Math.floor((uptimeSeconds % 3600) / 60)}m`
-        : `${Math.floor(uptimeSeconds / 60)}m ${uptimeSeconds % 60}s`;
-    try {
-        // Count messages sent today
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
-        const MessageModel = storage.getModel('messages');
-        const messagesToday = await MessageModel.countDocuments({
-            timestamp: { $gte: startOfDay.getTime() }
-        });
-        const activeDevices = SessionService.getAllSessions().filter(s => s.engine.currentStatus === 'CONNECTED').length;
-        res.json({
-            messagesToday,
-            activeDevices,
-            uptime: uptimeStr
-        });
-    }
-    catch (error) {
-        console.error('Stats Error:', error);
-        res.status(500).json({
-            messagesToday: 0,
-            activeDevices: 0,
-            uptime: uptimeStr
-        });
-    }
-});
-app.get('/', (req, res) => {
-    res.send('WhatsApp Backend Server is running (File Storage API)!');
-});
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-// Global CORS
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    next();
-});
+// --- Stats Endpoint ---
 // Middleware: Authenticate Token & Optional Admin Check
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -142,13 +97,13 @@ const seedAdmin = async () => {
         console.error('Failed to seed admin:', error);
     }
 };
-const PORT = 3050;
+const PORT = Number(process.env.PORT || 3050);
 // Initialize & Start Server
 const startServer = async () => {
     await storage.init(); // Ensure data dir exists
     await SessionService.loadSessions();
     await seedAdmin();
-    httpServer.listen(PORT, () => {
+    httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`Backend Server running on port ${PORT}`);
     });
 };
@@ -400,6 +355,7 @@ app.get('/api/sessions/:sessionId/messages', authenticateToken, async (req, res)
 });
 // --- Auto Reply Routes ---
 app.get('/api/autoreply', authenticateToken, async (req, res) => {
+    console.log(`[GET] /api/autoreply - User: ${req.user.userId}`);
     try {
         const rules = await AutoReplyService.getRules(req.user.userId);
         res.json(rules);
@@ -408,8 +364,10 @@ app.get('/api/autoreply', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch rules' });
     }
 });
+// Create Rule
 app.post('/api/autoreply', authenticateToken, async (req, res) => {
     try {
+        console.log(`[POST] /api/autoreply - User: ${req.user.userId}`, req.body);
         const { keyword, response, matchType, sessionId } = req.body;
         if (!keyword || !response)
             return res.status(400).json({ error: 'Missing keyword or response' });
@@ -424,9 +382,25 @@ app.post('/api/autoreply', authenticateToken, async (req, res) => {
         res.json(rule);
     }
     catch (e) {
-        res.status(500).json({ error: 'Failed to create rule' });
+        console.error(e);
+        res.status(500).json({ error: e.message });
     }
 });
+// Update Rule
+app.put('/api/autoreply/:id', authenticateToken, async (req, res) => {
+    try {
+        console.log(`[PUT] /api/autoreply/${req.params.id} - User: ${req.user.userId}`, req.body);
+        const rule = await AutoReplyService.updateRule(req.params.id, req.user.userId, req.body);
+        if (!rule)
+            return res.status(404).json({ error: 'Rule not found' });
+        res.json(rule);
+    }
+    catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
+// Delete Rule
 app.delete('/api/autoreply/:id', authenticateToken, async (req, res) => {
     try {
         await AutoReplyService.deleteRule(req.params.id, req.user.userId);
@@ -513,3 +487,35 @@ io.on('connection', (socket) => {
         await SessionService.logoutSession(sessionId, userId, socket, io);
     });
 });
+// ---------------------------------------------------------
+// KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
+// ---------------------------------------------------------
+// ---------------------------------------------------------
+// ---------------------------------------------------------
+// KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
+// ---------------------------------------------------------
+// Render automatically sets RENDER_EXTERNAL_URL (e.g., https://my-app.onrender.com)
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.VITE_API_URL || `http://localhost:${PORT}`;
+// Ping self every 5 minutes (300,000 ms) to stay active
+// Render Free Tier sleeps after 15 mins of inactivity.
+// We must ping the EXTERNAL URL to count as valid traffic.
+setInterval(() => {
+    const pingUrl = `${SELF_URL}/api/health-check`;
+    console.log(`[KeepAlive] Pinging ${pingUrl} to prevent sleep...`);
+    // Only attempt if it looks like a valid URL
+    if (pingUrl.startsWith('http')) {
+        fetch(pingUrl)
+            .then(res => {
+            if (res.ok)
+                console.log(`[KeepAlive] Ping Success: ${res.status}`);
+            else
+                console.warn(`[KeepAlive] Ping Returned: ${res.status}`);
+        })
+            .catch(err => console.error(`[KeepAlive] Ping Failed: ${err.message}`));
+    }
+}, 5 * 60 * 1000);
+// Dedicated Health Check Route
+app.get('/api/health-check', (req, res) => {
+    res.status(200).send('OK');
+});
+// ---------------------------------------------------------
