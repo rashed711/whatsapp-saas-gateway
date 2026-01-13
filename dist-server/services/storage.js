@@ -1,5 +1,5 @@
 import { connectDB } from './db.js';
-import { User, Session, Contact, Message } from '../models/index.js';
+import { User, Session, Contact, Message, MutedChat } from '../models/index.js';
 import { AutoReply } from '../models/AutoReply.js';
 class MongoStorage {
     constructor() {
@@ -15,6 +15,7 @@ class MongoStorage {
             case 'contacts': return Contact;
             case 'messages': return Message;
             case 'autoreplies': return AutoReply;
+            case 'muted_chats': return MutedChat;
             default: throw new Error(`Unknown collection: ${collection}`);
         }
     }
@@ -56,6 +57,9 @@ class MongoStorage {
         else if (collection === 'users' && item.username) {
             filter = { username: item.username };
         }
+        else if (collection === 'muted_chats' && item.sessionId && item.chatId) {
+            filter = { sessionId: item.sessionId, chatId: item.chatId };
+        }
         else {
             // New item without ID, just create
             const newItem = await Model.create(item);
@@ -84,6 +88,9 @@ class MongoStorage {
             }
             else if (collection === 'sessions') {
                 filter = { id: item.id };
+            }
+            else if (collection === 'muted_chats') {
+                filter = { sessionId: item.sessionId, chatId: item.chatId };
             }
             else if (item._id) {
                 filter = { _id: item._id };
