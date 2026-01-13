@@ -378,32 +378,53 @@ export class WhatsAppEngine {
         console.log(`[API] Sending ${type} to ${to}...`);
         try {
             if (type === 'text') {
-                const urlRegex = /(https?:\/\/[^\s]+)/g;
-                const matchedUrl = content.match(urlRegex)?.[0];
-                if (matchedUrl) {
-                    await this.sock.sendMessage(jid, { text: content });
-                    // Simplified link preview handling for stability
-                }
-                else {
-                    await this.sock.sendMessage(jid, { text: content });
-                }
+                // Plain text message
+                await this.sock.sendMessage(jid, { text: content });
             }
             else {
-                const base64Part = content.includes(',') ? content.split(',')[1] : content;
-                if (!base64Part)
-                    throw new Error("Invalid media content: Base64 data missing");
-                const buffer = Buffer.from(base64Part, 'base64');
-                if (type === 'image') {
-                    await this.sock.sendMessage(jid, { image: buffer, caption: caption });
+                // Media message handling
+                const isUrl = content.startsWith('http://') || content.startsWith('https://');
+                if (isUrl) {
+                    // A. Handle URL (Best for n8n/Automation)
+                    console.log(`[API] Detected Media URL for ${type}`);
+                    if (type === 'image') {
+                        await this.sock.sendMessage(jid, { image: { url: content }, caption: caption });
+                    }
+                    else if (type === 'audio') {
+                        await this.sock.sendMessage(jid, { audio: { url: content }, ptt: true }); // Send as Voice Note
+                    }
+                    else if (type === 'video') {
+                        await this.sock.sendMessage(jid, { video: { url: content }, caption: caption });
+                    }
+                    else if (type === 'document') {
+                        // Try to guess mimetype or default to pdf (WhatsApp requires mimetype for documents usually)
+                        // Ideally we'd fetch HEAD to check content-type, but for now we default to pdf/octet-stream
+                        // n8n users should ensure their URL is direct.
+                        await this.sock.sendMessage(jid, {
+                            document: { url: content },
+                            mimetype: 'application/pdf',
+                            fileName: caption || content.split('/').pop() || 'file.pdf'
+                        });
+                    }
                 }
-                else if (type === 'audio') {
-                    await this.sock.sendMessage(jid, { audio: buffer, ptt: true });
-                }
-                else if (type === 'video') {
-                    await this.sock.sendMessage(jid, { video: buffer, caption: caption });
-                }
-                else if (type === 'document') {
-                    await this.sock.sendMessage(jid, { document: buffer, mimetype: 'application/pdf', fileName: caption || 'file.pdf' });
+                else {
+                    // B. Handle Base64 (Legacy/Direct Upload)
+                    const base64Part = content.includes(',') ? content.split(',')[1] : content;
+                    if (!base64Part)
+                        throw new Error("Invalid media content: Base64 data missing");
+                    const buffer = Buffer.from(base64Part, 'base64');
+                    if (type === 'image') {
+                        await this.sock.sendMessage(jid, { image: buffer, caption: caption });
+                    }
+                    else if (type === 'audio') {
+                        await this.sock.sendMessage(jid, { audio: buffer, ptt: true });
+                    }
+                    else if (type === 'video') {
+                        await this.sock.sendMessage(jid, { video: buffer, caption: caption });
+                    }
+                    else if (type === 'document') {
+                        await this.sock.sendMessage(jid, { document: buffer, mimetype: 'application/pdf', fileName: caption || 'file.pdf' });
+                    }
                 }
             }
             return { success: true, timestamp: Date.now() };

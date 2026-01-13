@@ -400,6 +400,126 @@ app.get('/api/sessions/:sessionId/messages', authenticateToken, async (req: any,
     }
 });
 
+// --- n8n-Optimized API (Unified Endpoint) ---
+
+// Simple in-memory Idempotency Store (Cleaned up every hour)
+const idempotencyStore = new Map<string, { response: any, timestamp: number }>();
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of idempotencyStore.entries()) {
+        if (now - value.timestamp > 24 * 60 * 60 * 1000) { // 24 hours TTL
+            idempotencyStore.delete(key);
+        }
+    }
+}, 60 * 60 * 1000);
+
+app.post('/api/sessions/:sessionId/messages', authenticateToken, async (req: any, res) => {
+    const { sessionId } = req.params;
+    const { to, text, media_url, media_id, media_type, filename, caption } = req.body;
+    const idempotencyKey = req.headers['idempotency-key'];
+
+    // 1. Idempotency Check
+    if (idempotencyKey) {
+        const cached = idempotencyStore.get(`${sessionId}:${idempotencyKey}`);
+        if (cached) {
+            console.log(`[API] Idempotency hit: ${idempotencyKey}`);
+            // Return cached response (Success guarantees)
+            return res.json(cached.response);
+        }
+    }
+
+    const session = SessionService.getSession(sessionId);
+
+    // 2. Isolation & Status Check
+    if (!session || session.userId !== req.user.userId) {
+        return res.status(404).json({ success: false, error_code: 'SESSION_NOT_FOUND', message: 'Session not found or access denied' });
+    }
+
+    if (session.engine.currentStatus !== 'CONNECTED') {
+        return res.status(400).json({ success: false, error_code: 'SESSION_NOT_CONNECTED', message: 'Session is not connected' });
+    }
+
+    // 3. Validation
+    if (!to) {
+        return res.status(400).json({ success: false, error_code: 'MISSING_RECIPIENT', message: 'The "to" field is required.' });
+    }
+
+    if (!text && !media_url && !media_id) {
+        return res.status(400).json({ success: false, error_code: 'EMPTY_MESSAGE', message: 'Message must contain text, media_url, or media_id.' });
+    }
+
+    // Normalize Number
+    const cleanNumber = to.replace(/\D/g, '');
+    const finalNumber = (cleanNumber.startsWith('01') && cleanNumber.length === 11)
+        ? '20' + cleanNumber.substring(1)
+        : cleanNumber;
+
+    if (finalNumber.length < 10) {
+        return res.status(400).json({ success: false, error_code: 'INVALID_NUMBER', message: 'Invalid phone number format.' });
+    }
+
+    try {
+        // 4. Logic Extraction (Implicit Intelligence)
+        let finalType: 'text' | 'image' | 'video' | 'audio' | 'document' = 'text';
+        let finalContent = text || '';
+        let finalCaption = caption || text || ''; // For media, 'text' works as caption if explicit caption is missing
+
+        if (media_url) {
+            finalContent = media_url;
+
+            if (media_type) {
+                // Trust user input if valid
+                if (['image', 'video', 'audio', 'document'].includes(media_type)) {
+                    finalType = media_type;
+                } else {
+                    finalType = 'document'; // Fallback
+                }
+            } else {
+                // Simple extension inference
+                const ext = media_url.split('.').pop()?.toLowerCase();
+                if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) finalType = 'image';
+                else if (['mp4', 'mov', 'avi', 'mkv'].includes(ext)) finalType = 'video';
+                else if (['mp3', 'ogg', 'wav', 'm4a'].includes(ext)) finalType = 'audio';
+                else finalType = 'document';
+            }
+
+            // If it's media, the 'text' param is definitely the caption
+            // BUT if caption is explicitly provided, it takes precedence
+            if (!caption && text) {
+                finalCaption = text;
+            }
+
+        } else if (text) {
+            finalType = 'text';
+            finalContent = text;
+        }
+
+        // 5. Send using the updated Engine logic (supports URLs)
+        await session.engine.send(finalNumber, finalType, finalContent, finalCaption);
+
+        const responsePayload = {
+            success: true,
+            // Generate a predictable message ID or use timestamp
+            message_id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+            status: 'queued'
+        };
+
+        // Cache Idempotency
+        if (idempotencyKey) {
+            idempotencyStore.set(`${sessionId}:${idempotencyKey}`, {
+                response: responsePayload,
+                timestamp: Date.now()
+            });
+        }
+
+        return res.json(responsePayload);
+
+    } catch (error: any) {
+        console.error(`n8n API Error [${sessionId}]:`, error);
+        return res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: error.message || 'Internal Server Error' });
+    }
+});
+
 // --- Auto Reply Routes ---
 
 app.get('/api/autoreply', authenticateToken, async (req: any, res) => {
