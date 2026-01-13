@@ -38,6 +38,12 @@ export class WhatsAppEngine {
    * Initialize Session
    */
   async startSession(onQR: (qr: string) => void, onConnected: () => void) {
+    if (this.sock || this.status === 'CONNECTED') {
+      console.log(`[Engine] Session ${this.sessionId} is already active/connecting. Ignoring start request.`);
+      if (this.status === 'CONNECTED') onConnected();
+      return;
+    }
+
     this.status = 'QR';
     console.log(`[Engine] Starting Baileys socket for session ${this.sessionId} (Mongo Auth)...`);
 
