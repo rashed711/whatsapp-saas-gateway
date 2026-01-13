@@ -24,6 +24,7 @@ export class WhatsAppEngine {
   private sock: any = null;
   private retryCount = 0;
   private connectionStabilityTimeout: NodeJS.Timeout | null = null;
+  private sentMessageIds = new Set<string>();
 
   constructor(userId: string, sessionId: string) {
     this.userId = userId;
@@ -187,6 +188,12 @@ export class WhatsAppEngine {
             // console.log(`[Engine] Processing Msg: ...`);
 
             if (msg.key.fromMe) {
+              // Ignore bot's own messages (Auto-Replies) to prevent triggering Human Takeover
+              if (msg.key.id && this.sentMessageIds.has(msg.key.id)) {
+                // console.log(`[Human Takeover] Ignoring bot auto-reply: ${msg.key.id}`);
+                continue;
+              }
+
               // --- Human Takeover Logic ---
               // If user replies manually, mute the bot for this chat
               const targetJid = msg.key.remoteJid;
@@ -253,20 +260,21 @@ export class WhatsAppEngine {
                     const responseText = matchedRule.response; // Caption or Text
 
                     try {
+                      let sentMsg;
                       if (matchedRule.replyType === 'image' && matchedRule.mediaUrl) {
-                        await this.sock.sendMessage(remoteJid, {
+                        sentMsg = await this.sock.sendMessage(remoteJid, {
                           image: { url: matchedRule.mediaUrl },
                           caption: responseText
                         }, { quoted: msg });
 
                       } else if (matchedRule.replyType === 'video' && matchedRule.mediaUrl) {
-                        await this.sock.sendMessage(remoteJid, {
+                        sentMsg = await this.sock.sendMessage(remoteJid, {
                           video: { url: matchedRule.mediaUrl },
                           caption: responseText
                         }, { quoted: msg });
 
                       } else if (matchedRule.replyType === 'document' && matchedRule.mediaUrl) {
-                        await this.sock.sendMessage(remoteJid, {
+                        sentMsg = await this.sock.sendMessage(remoteJid, {
                           document: { url: matchedRule.mediaUrl },
                           mimetype: 'application/pdf', // Default, maybe detect from extension later
                           fileName: matchedRule.fileName || 'file.pdf',
@@ -274,14 +282,19 @@ export class WhatsAppEngine {
                         }, { quoted: msg });
 
                       } else if (matchedRule.replyType === 'audio' && matchedRule.mediaUrl) {
-                        await this.sock.sendMessage(remoteJid, {
+                        sentMsg = await this.sock.sendMessage(remoteJid, {
                           audio: { url: matchedRule.mediaUrl },
                           ptt: true // Send as Voice Note
                         }, { quoted: msg });
 
                       } else {
                         // Default: Text
-                        await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
+                        sentMsg = await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
+                      }
+
+                      if (sentMsg?.key?.id) {
+                        this.sentMessageIds.add(sentMsg.key.id);
+                        setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000); // Clear after 15s
                       }
                       console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
 
