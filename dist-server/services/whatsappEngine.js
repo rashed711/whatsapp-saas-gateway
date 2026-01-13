@@ -145,13 +145,13 @@ export class WhatsAppEngine {
                                 const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
                                 if (text && (text.toLowerCase() === '#bot' || text.toLowerCase() === '#unmute')) {
                                     console.log(`[Human Takeover] User re-enabled bot for ${targetJid}`);
-                                    await storage.deleteItem('muted_chats', { sessionId: this.sessionId, jid: targetJid });
+                                    await storage.deleteItem('muted_chats', { sessionId: this.sessionId, chatId: targetJid });
                                 }
                                 else {
                                     console.log(`[Human Takeover] Manual reply detected. Muting bot for ${targetJid}`);
                                     await storage.saveItem('muted_chats', {
                                         sessionId: this.sessionId,
-                                        jid: targetJid,
+                                        chatId: targetJid,
                                         mutedAt: new Date(),
                                         userId: this.userId
                                     });
@@ -167,7 +167,7 @@ export class WhatsAppEngine {
                         // --- Auto Reply Logic ---
                         try {
                             // 0. Check if Chat is Muted (Human Takeover)
-                            const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, jid: remoteJid });
+                            const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
                             if (isMuted) {
                                 // Optional: Log that we skipped
                                 // console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Human Mode.`);
