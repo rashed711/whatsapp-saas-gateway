@@ -543,9 +543,10 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
 
         await storage.saveItem('sessions', updatedSession);
         res.json({ success: true, message: 'Webhook URL updated', webhookUrl });
-    } catch (error) {
-        console.error('Webhook save error:', error); // Add logging
-        res.status(500).json({ error: 'Failed to update webhook URL' });
+    } catch (error: any) {
+        console.error('Webhook save error:', error);
+        // Expose the actual error message to the client for debugging
+        res.status(500).json({ error: 'Failed to update webhook URL', details: error.message || error });
     }
 });
 

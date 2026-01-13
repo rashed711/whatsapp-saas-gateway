@@ -170,7 +170,9 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                 setShowWebhookModal(false);
                 alert('تم حفظ رابط الويب هوك بنجاح');
             } else {
-                alert('فشل حفظ الرابط');
+                const data = await response.json();
+                console.error('Save failed:', data);
+                alert('فشل حفظ الرابط: ' + (data.details || data.error || 'خطأ غير معروف'));
             }
         } catch (error) {
             console.error(error);
