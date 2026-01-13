@@ -535,7 +535,12 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
     try {
         // Merge with existing session data to avoid validation errors or data loss
         const updatedSession = { ...session, webhookUrl: webhookUrl || '' };
-        if (updatedSession._id) delete updatedSession._id; // Prevent "Mod on _id not allowed" error
+
+        // Clean up fields that shouldn't be updated manually or cause Mongoose errors
+        if (updatedSession._id) delete updatedSession._id;
+        delete updatedSession.createdAt;
+        delete updatedSession.updatedAt;
+
         await storage.saveItem('sessions', updatedSession);
         res.json({ success: true, message: 'Webhook URL updated', webhookUrl });
     } catch (error) {
