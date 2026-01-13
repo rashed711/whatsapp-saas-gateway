@@ -272,7 +272,8 @@ app.get('/api/sessions', authenticateToken, async (req, res) => {
         .map(s => ({
         id: s.id,
         name: s.name,
-        status: s.engine.currentStatus
+        status: s.engine.currentStatus,
+        webhookUrl: s.webhookUrl // Include Webhook URL
     }));
     res.json(userSessions);
 });
@@ -458,6 +459,23 @@ app.post('/api/sessions/:sessionId/messages', authenticateToken, async (req, res
     catch (error) {
         console.error(`n8n API Error [${sessionId}]:`, error);
         return res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: error.message || 'Internal Server Error' });
+    }
+});
+// Configure Webhook URL
+app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req, res) => {
+    const { sessionId } = req.params;
+    const { webhookUrl } = req.body;
+    // Isolation Check
+    const session = await storage.getItem('sessions', { id: sessionId });
+    if (!session || session.userId !== req.user.userId) {
+        return res.status(404).json({ error: 'Session not found or access denied' });
+    }
+    try {
+        await storage.saveItem('sessions', { id: sessionId, webhookUrl: webhookUrl || '' }); // Allow clearing by sending empty string
+        res.json({ success: true, message: 'Webhook URL updated', webhookUrl });
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to update webhook URL' });
     }
 });
 // --- Auto Reply Routes ---

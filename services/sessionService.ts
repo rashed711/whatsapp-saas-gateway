@@ -7,6 +7,7 @@ export interface ActiveSession {
     name: string;
     userId: string;
     engine: WhatsAppEngine;
+    webhookUrl?: string;
 }
 
 export class SessionService {
@@ -29,6 +30,7 @@ export class SessionService {
                     id: s.id,
                     name: s.name,
                     userId: s.userId,
+                    webhookUrl: s.webhookUrl,
                     engine
                 });
 
@@ -70,11 +72,12 @@ export class SessionService {
     static async createSession(userId: string, name: string): Promise<string> {
         const sessionId = 'sess_' + Date.now();
         const engine = new WhatsAppEngine(userId, sessionId);
+        const webhookUrl = ''; // Default empty
 
-        this.sessions.set(sessionId, { id: sessionId, name, userId, engine });
+        this.sessions.set(sessionId, { id: sessionId, name, userId, engine, webhookUrl });
 
         try {
-            await storage.saveItem('sessions', { id: sessionId, name, userId, status: 'IDLE' });
+            await storage.saveItem('sessions', { id: sessionId, name, userId, status: 'IDLE', webhookUrl });
         } catch (saveError) {
             console.error('Failed to save session to storage:', saveError);
             // We might want to throw here to prevent in-memory only sessions

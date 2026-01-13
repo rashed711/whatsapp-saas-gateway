@@ -301,7 +301,8 @@ app.get('/api/sessions', authenticateToken, async (req: any, res) => {
         .map(s => ({
             id: s.id,
             name: s.name,
-            status: s.engine.currentStatus
+            status: s.engine.currentStatus,
+            webhookUrl: s.webhookUrl // Include Webhook URL
         }));
     res.json(userSessions);
 });

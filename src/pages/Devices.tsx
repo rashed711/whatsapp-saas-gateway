@@ -7,6 +7,7 @@ interface Session {
     name: string;
     status: 'IDLE' | 'QR' | 'CONNECTED' | 'ERROR' | 'connecting' | 'disconnected';
     qr?: string;
+    webhookUrl?: string; // Add this
 }
 
 interface DevicesProps {
@@ -143,6 +144,42 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
         }
     };
 
+    const [showWebhookModal, setShowWebhookModal] = useState(false);
+    const [webhookUrlInput, setWebhookUrlInput] = useState('');
+    const [selectedSessionWebhook, setSelectedSessionWebhook] = useState<Session | null>(null);
+
+    const handleSaveWebhook = async () => {
+        if (!selectedSessionWebhook) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3050'}/api/sessions/${selectedSessionWebhook.id}/webhook`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ webhookUrl: webhookUrlInput })
+            });
+
+            if (response.ok) {
+                // Update local state to reflect change immediately
+                setSessions(prev => prev.map(s =>
+                    s.id === selectedSessionWebhook.id ? { ...s, webhookUrl: webhookUrlInput } : s
+                ));
+                setShowWebhookModal(false);
+                alert('تم حفظ رابط الويب هوك بنجاح');
+            } else {
+                alert('فشل حفظ الرابط');
+            }
+        } catch (error) {
+            console.error(error);
+            alert('حدث خطأ أثناء الحفظ');
+        }
+    };
+
+    // ... (existing code)
+
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -250,6 +287,17 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                     >
                                         <Code size={12} /> الربط البرمجي (API)
                                     </button>
+
+                                    <button
+                                        onClick={() => {
+                                            setSelectedSessionWebhook(session);
+                                            setWebhookUrlInput(session.webhookUrl || '');
+                                            setShowWebhookModal(true);
+                                        }}
+                                        className="w-full py-2 text-purple-400 hover:text-purple-600 text-xs font-bold transition-colors flex items-center justify-center gap-1 border-t border-slate-50 pt-2"
+                                    >
+                                        <div className="w-3 h-3 rounded-full bg-purple-500 flex items-center justify-center text-[8px] text-white">W</div> إعدادات Webhook
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -343,6 +391,44 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                 </div>
                             </div>
 
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Webhook Modal */}
+            {showWebhookModal && selectedSessionWebhook && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 text-right" dir="rtl">
+                    <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-xl font-bold text-slate-800">إعدادات Webhook</h3>
+                            <button onClick={() => setShowWebhookModal(false)} className="text-slate-400 hover:text-slate-600">
+                                <X size={24} />
+                            </button>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-bold text-slate-600 mb-2">رابط (Webhook URL)</label>
+                                <input
+                                    type="url"
+                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-left font-mono text-sm"
+                                    placeholder="https://n8n.your-domain.com/webhook/..."
+                                    value={webhookUrlInput}
+                                    onChange={(e) => setWebhookUrlInput(e.target.value)}
+                                    autoFocus
+                                />
+                                <p className="text-xs text-slate-400 mt-2">
+                                    سيتم إرسال جميع الرسائل الواردة إلى هذا الرابط (POST).
+                                </p>
+                            </div>
+
+                            <button
+                                onClick={handleSaveWebhook}
+                                className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition-colors shadow-lg shadow-blue-500/20"
+                            >
+                                حفظ الإعدادات
+                            </button>
                         </div>
                     </div>
                 </div>

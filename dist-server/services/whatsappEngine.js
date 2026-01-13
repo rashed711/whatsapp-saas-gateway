@@ -199,6 +199,57 @@ export class WhatsAppEngine {
                         if (!remoteJid || remoteJid.includes('@broadcast') || (!remoteJid.includes('@s.whatsapp.net') && !remoteJid.includes('@lid')))
                             continue;
                         const pushName = msg.pushName;
+                        // --- Webhook Trigger (n8n) ---
+                        try {
+                            const session = await storage.getItem('sessions', { id: this.sessionId });
+                            if (session && session.webhookUrl) {
+                                console.log(`[Webhook] Reforwarding message from ${remoteJid} to ${session.webhookUrl}`);
+                                // Determine message type and content
+                                let msgType = 'text';
+                                let msgContent = '';
+                                if (msg.message?.conversation) {
+                                    msgContent = msg.message.conversation;
+                                }
+                                else if (msg.message?.extendedTextMessage?.text) {
+                                    msgContent = msg.message.extendedTextMessage.text;
+                                }
+                                else if (msg.message?.imageMessage) {
+                                    msgType = 'image';
+                                    msgContent = '[Image]'; // We could potentially download and upload, or just notify
+                                }
+                                else if (msg.message?.videoMessage) {
+                                    msgType = 'video';
+                                    msgContent = '[Video]';
+                                }
+                                else if (msg.message?.audioMessage) {
+                                    msgType = 'audio';
+                                    msgContent = '[Audio]';
+                                }
+                                else if (msg.message?.documentMessage) {
+                                    msgType = 'document';
+                                    msgContent = '[Document]';
+                                }
+                                const payload = {
+                                    event: 'message.received',
+                                    session_id: this.sessionId,
+                                    from: remoteJid.replace('@s.whatsapp.net', ''),
+                                    pushName: pushName,
+                                    type: msgType,
+                                    content: msgContent,
+                                    timestamp: msg.messageTimestamp,
+                                    full_message: msg
+                                };
+                                // Fire and Forget (Don't await to avoid blocking auto-reply)
+                                fetch(session.webhookUrl, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload)
+                                }).catch(err => console.error(`[Webhook] Failed to send to ${session.webhookUrl}:`, err.message));
+                            }
+                        }
+                        catch (whErr) {
+                            console.error('[Webhook] Error:', whErr);
+                        }
                         // --- Auto Reply Logic ---
                         try {
                             // 0. Check if Chat is Muted (Human Takeover)

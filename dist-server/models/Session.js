@@ -3,6 +3,7 @@ const SessionSchema = new Schema({
     id: { type: String, required: true, unique: true },
     name: { type: String, required: true },
     userId: { type: String, required: true },
+    webhookUrl: { type: String }, // Optional Webhook URL
     status: {
         type: String,
         enum: ['IDLE', 'QR', 'CONNECTED', 'DISCONNECTED'],
