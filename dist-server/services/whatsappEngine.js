@@ -18,6 +18,7 @@ export class WhatsAppEngine {
     status = 'IDLE';
     sock = null;
     retryCount = 0;
+    connectionStabilityTimeout = null;
     constructor(userId, sessionId) {
         this.userId = userId;
         this.sessionId = sessionId;
@@ -93,13 +94,22 @@ export class WhatsAppEngine {
                     }
                     // -----------------------------------------------------
                     this.status = 'CONNECTED';
-                    this.retryCount = 0; // Reset retry count
+                    // Delay resetting retryCount to ensure stability. 
+                    // If we disconnect within 15s (e.g. 440 conflict), retryCount will NOT reset, forcing exponential backoff.
+                    if (this.connectionStabilityTimeout)
+                        clearTimeout(this.connectionStabilityTimeout);
+                    this.connectionStabilityTimeout = setTimeout(() => {
+                        this.retryCount = 0;
+                        console.log(`[Engine] Session ${this.sessionId} connection stabilized. Retry count reset.`);
+                    }, 15000);
                     onConnected();
                 }
                 else if (connection === 'close') {
                     // Reset status to allow reconnection logic to pass the guard in startSession
                     this.status = 'IDLE';
                     this.sock = null;
+                    if (this.connectionStabilityTimeout)
+                        clearTimeout(this.connectionStabilityTimeout);
                     const reason = lastDisconnect?.error?.output?.statusCode;
                     console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
                     const shouldReconnect = reason !== DisconnectReason.loggedOut;
