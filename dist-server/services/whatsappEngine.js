@@ -186,14 +186,15 @@ export class WhatsAppEngine {
                         // --- Auto Reply Logic ---
                         try {
                             // 0. Check if Chat is Muted (Human Takeover)
+                            // 0. Check if Chat is Muted (Human Takeover)
                             const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
                             if (isMuted) {
-                                // Optional: Log that we skipped
-                                // console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Human Mode.`);
+                                console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Muted Mode.`);
                             }
                             else {
                                 // Extract text content (support conversation or extendedTextMessage)
                                 const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                                console.log(`[AutoReply] Processing for ${remoteJid}. Extracted Text: "${textContent}"`);
                                 if (textContent) {
                                     console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
                                     const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
