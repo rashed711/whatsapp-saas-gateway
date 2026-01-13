@@ -97,6 +97,9 @@ export class WhatsAppEngine {
                     onConnected();
                 }
                 else if (connection === 'close') {
+                    // Reset status to allow reconnection logic to pass the guard in startSession
+                    this.status = 'IDLE';
+                    this.sock = null;
                     const reason = lastDisconnect?.error?.output?.statusCode;
                     console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
                     const shouldReconnect = reason !== DisconnectReason.loggedOut;

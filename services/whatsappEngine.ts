@@ -118,6 +118,10 @@ export class WhatsAppEngine {
           this.retryCount = 0; // Reset retry count
           onConnected();
         } else if (connection === 'close') {
+          // Reset status to allow reconnection logic to pass the guard in startSession
+          this.status = 'IDLE';
+          this.sock = null;
+
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
           console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
 
