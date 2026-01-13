@@ -19,9 +19,15 @@ const App = () => {
   const [socket, setSocket] = useState<any>(null);
 
   useEffect(() => {
+    // Wake up backend on initial load (Render Free Tier Sleep)
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3050';
+    fetch(`${apiUrl}/api/health-check`)
+      .then(() => console.log('Backend woken up'))
+      .catch(() => console.log('Backend waking up...'));
+
     const token = localStorage.getItem('token');
     if (isAuthenticated && token) {
-      const newSocket = io(import.meta.env.VITE_API_URL || 'http://localhost:3050', {
+      const newSocket = io(apiUrl, {
         auth: { token }
       });
       setSocket(newSocket);
