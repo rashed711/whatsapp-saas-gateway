@@ -145,16 +145,26 @@ export class WhatsAppEngine {
                                 const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
                                 if (text && (text.toLowerCase() === '#bot' || text.toLowerCase() === '#unmute')) {
                                     console.log(`[Human Takeover] User re-enabled bot for ${targetJid}`);
-                                    await storage.deleteItem('muted_chats', { sessionId: this.sessionId, chatId: targetJid });
+                                    try {
+                                        await storage.deleteItem('muted_chats', { sessionId: this.sessionId, chatId: targetJid });
+                                    }
+                                    catch (err) {
+                                        console.error('[Human Takeover] Failed to unmute chat:', err);
+                                    }
                                 }
                                 else {
                                     console.log(`[Human Takeover] Manual reply detected. Muting bot for ${targetJid}`);
-                                    await storage.saveItem('muted_chats', {
-                                        sessionId: this.sessionId,
-                                        chatId: targetJid,
-                                        mutedAt: new Date(),
-                                        userId: this.userId
-                                    });
+                                    try {
+                                        await storage.saveItem('muted_chats', {
+                                            sessionId: this.sessionId,
+                                            chatId: targetJid,
+                                            mutedAt: new Date(),
+                                            userId: this.userId
+                                        });
+                                    }
+                                    catch (err) {
+                                        console.error('[Human Takeover] Failed to mute chat:', err);
+                                    }
                                 }
                             }
                             continue;
