@@ -175,7 +175,7 @@ export class WhatsAppEngine {
           const contactsToUpdate = [];
 
           for (const msg of messages) {
-            console.log(`[Engine] Processing Msg: fromMe=${msg.key.fromMe}, remoteJid=${msg.key.remoteJid}, type=${Object.keys(msg.message || {})}`);
+            // console.log(`[Engine] Processing Msg: ...`);
 
             if (msg.key.fromMe) {
               // --- Human Takeover Logic ---
@@ -225,8 +225,6 @@ export class WhatsAppEngine {
               } else {
                 // Extract text content (support conversation or extendedTextMessage)
                 const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-
-                console.log(`[AutoReply] Processing for ${remoteJid}. Extracted Text: "${textContent}"`);
 
                 if (textContent) {
                   console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
