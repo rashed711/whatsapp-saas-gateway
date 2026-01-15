@@ -523,10 +523,14 @@ app.post('/api/sessions/:sessionId/messages', authenticateToken, async (req: any
     }
 });
 
+
 // Configure Webhook URL
 app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, res) => {
     const { sessionId } = req.params;
     const { webhookUrl, webhookUrls, webhooks } = req.body;
+
+    console.log(`[Webhook Update] Session: ${sessionId}`);
+    console.log(`[Webhook Update] Payload:`, JSON.stringify(req.body, null, 2));
 
     // Isolation Check
     const session = await storage.getItem('sessions', { id: sessionId });
@@ -546,6 +550,8 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
             }));
         }
 
+        console.log(`[Webhook Update] Processed Webhooks:`, textWebhooks);
+
         // Merge with existing session data to avoid validation errors or data loss
         const updatedSession = {
             ...session,
@@ -554,17 +560,14 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
             webhooks: textWebhooks
         };
 
-        // If webhookUrl is updated but webhookUrls is not provided/empty, we can optionally sync them
-        // But for now, let's keep them independent or allow the frontend to manage logic.
-        // Actually, if the user provides a legacy webhookUrl, we should ensure it's in the list too?
-        // Let's stick to the plan: explicit updates.
-
         // Clean up fields that shouldn't be updated manually or cause Mongoose errors
         if (updatedSession._id) delete updatedSession._id;
         delete updatedSession.createdAt;
         delete updatedSession.updatedAt;
 
+        console.log(`[Webhook Update] Saving to Storage...`);
         await storage.saveItem('sessions', updatedSession);
+        console.log(`[Webhook Update] Save Complete.`);
 
         // Sync in-memory cache
         SessionService.updateSessionWebhooks(sessionId, updatedSession.webhooks);
@@ -576,6 +579,7 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
         res.status(500).json({ error: 'Failed to update webhook URL', details: error.message || error });
     }
 });
+
 
 // --- Auto Reply Routes ---
 
