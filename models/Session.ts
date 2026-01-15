@@ -5,8 +5,9 @@ export interface ISession extends Document {
   name: string;
   userId: string;
   status: 'IDLE' | 'QR' | 'CONNECTED' | 'DISCONNECTED';
-  webhookUrl?: string; // Legacy: URL to forward incoming messages to
-  webhookUrls?: string[]; // New: List of URLs to forward incoming messages to
+  webhookUrl?: string; // Legacy
+  webhookUrls?: string[]; // Legacy (Keep for migration if needed, or deprecate)
+  webhooks?: { name: string; url: string }[]; // New: Named Webhooks
   createdAt?: string;
   updatedAt?: string;
 }
@@ -15,8 +16,15 @@ const SessionSchema = new Schema<ISession>({
   id: { type: String, required: true, unique: true },
   name: { type: String, required: true },
   userId: { type: String, required: true },
-  webhookUrl: { type: String }, // Optional Webhook URL
-  webhookUrls: { type: [String], default: [] }, // Optional Webhook URLs
+  webhookUrl: { type: String }, // Legacy
+  webhookUrls: { type: [String], default: [] }, // Legacy
+  webhooks: {
+    type: [{
+      name: { type: String, required: true },
+      url: { type: String, required: true }
+    }],
+    default: []
+  },
   status: {
     type: String,
     enum: ['IDLE', 'QR', 'CONNECTED', 'DISCONNECTED'],

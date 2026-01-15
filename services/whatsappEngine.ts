@@ -235,10 +235,21 @@ export class WhatsAppEngine {
 
               // Collect all unique URLs
               const targets = new Set<string>();
+
+              // 1. Legacy Single
               if (session?.webhookUrl) targets.add(session.webhookUrl);
+
+              // 2. Legacy Array
               if (session?.webhookUrls && Array.isArray(session.webhookUrls)) {
                 session.webhookUrls.forEach((url: string) => {
                   if (url && typeof url === 'string') targets.add(url);
+                });
+              }
+
+              // 3. New Named Webhooks
+              if (session?.webhooks && Array.isArray(session.webhooks)) {
+                session.webhooks.forEach((w: any) => {
+                  if (w.url && typeof w.url === 'string') targets.add(w.url);
                 });
               }
 

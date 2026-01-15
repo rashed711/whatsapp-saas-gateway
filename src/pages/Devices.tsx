@@ -7,8 +7,9 @@ interface Session {
     name: string;
     status: 'IDLE' | 'QR' | 'CONNECTED' | 'ERROR' | 'connecting' | 'disconnected';
     qr?: string;
-    webhookUrl?: string; // Add this
-    webhookUrls?: string[]; // Add this
+    webhookUrl?: string; // Legacy
+    webhookUrls?: string[]; // Legacy
+    webhooks?: { name: string; url: string }[]; // New
 }
 
 interface DevicesProps {
@@ -146,22 +147,35 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
     };
 
     const [showWebhookModal, setShowWebhookModal] = useState(false);
+
+    // New State for Named Webhooks
+    const [webhookNameInput, setWebhookNameInput] = useState('');
     const [webhookUrlInput, setWebhookUrlInput] = useState('');
-    const [webhookUrlsList, setWebhookUrlsList] = useState<string[]>([]);
+    const [webhooksList, setWebhooksList] = useState<{ name: string, url: string }[]>([]);
+
     const [selectedSessionWebhook, setSelectedSessionWebhook] = useState<Session | null>(null);
 
-    const handleAddWebhookUrl = () => {
+    const handleAddWebhook = () => {
         if (!webhookUrlInput.trim()) return;
-        if (webhookUrlsList.includes(webhookUrlInput.trim())) {
+
+        // Basic Duplicate Check (by URL)
+        if (webhooksList.some(w => w.url === webhookUrlInput.trim())) {
             alert('هذا الرابط مضاف بالفعل');
             return;
         }
-        setWebhookUrlsList([...webhookUrlsList, webhookUrlInput.trim()]);
+
+        const newWebhook = {
+            name: webhookNameInput.trim() || 'Webhook', // Default Name
+            url: webhookUrlInput.trim()
+        };
+
+        setWebhooksList([...webhooksList, newWebhook]);
         setWebhookUrlInput('');
+        setWebhookNameInput('');
     };
 
-    const handleRemoveWebhookUrl = (urlToRemove: string) => {
-        setWebhookUrlsList(webhookUrlsList.filter(url => url !== urlToRemove));
+    const handleRemoveWebhook = (urlToRemove: string) => {
+        setWebhooksList(webhooksList.filter(w => w.url !== urlToRemove));
     };
 
     const handleSaveWebhook = async () => {
@@ -171,10 +185,6 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
             const token = localStorage.getItem('token');
             const baseUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || `${window.location.protocol}//${window.location.hostname}:3050`;
 
-            // Sync legacy logic with new logic
-            // If the list is empty but input has text, maybe user forgot to click add? 
-            // Let's assume user intends to save the list.
-
             const response = await fetch(`${baseUrl}/api/sessions/${selectedSessionWebhook.id}/webhook`, {
                 method: 'PUT',
                 headers: {
@@ -182,19 +192,20 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                     'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({
-                    webhookUrl: webhookUrlsList.length > 0 ? webhookUrlsList[0] : '', // Legacy fallback
-                    webhookUrls: webhookUrlsList
+                    webhookUrl: '', // Clear legacy single
+                    webhookUrls: [], // Clear legacy array
+                    webhooks: webhooksList // Save new structure
                 })
             });
 
             if (response.ok) {
-                // Update local state to reflect change immediately
                 const updatedData = await response.json();
                 setSessions(prev => prev.map(s =>
                     s.id === selectedSessionWebhook.id ? {
                         ...s,
                         webhookUrl: updatedData.webhookUrl,
-                        webhookUrls: updatedData.webhookUrls
+                        webhookUrls: updatedData.webhookUrls,
+                        webhooks: updatedData.webhooks
                     } : s
                 ));
                 setShowWebhookModal(false);
@@ -324,11 +335,25 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                         onClick={() => {
                                             setSelectedSessionWebhook(session);
                                             setWebhookUrlInput('');
-                                            // Initialize list from session data, handling both legacy and new
-                                            const existing = session.webhookUrls && session.webhookUrls.length > 0
-                                                ? session.webhookUrls
-                                                : session.webhookUrl ? [session.webhookUrl] : [];
-                                            setWebhookUrlsList(existing);
+                                            setWebhookNameInput('');
+
+                                            // Initialize list (Migration Logic)
+                                            let initialWebhooks: { name: string, url: string }[] = [];
+
+                                            // 1. prefer new structure
+                                            if (session.webhooks && session.webhooks.length > 0) {
+                                                initialWebhooks = session.webhooks;
+                                            }
+                                            // 2. Fallback to old array
+                                            else if (session.webhookUrls && session.webhookUrls.length > 0) {
+                                                initialWebhooks = session.webhookUrls.map(url => ({ name: 'Webhook', url }));
+                                            }
+                                            // 3. Fallback to oldest single
+                                            else if (session.webhookUrl) {
+                                                initialWebhooks = [{ name: 'Default webhook', url: session.webhookUrl }];
+                                            }
+
+                                            setWebhooksList(initialWebhooks);
                                             setShowWebhookModal(true);
                                         }}
                                         className="w-full py-2 text-purple-400 hover:text-purple-600 text-xs font-bold transition-colors flex items-center justify-center gap-1 border-t border-slate-50 pt-2"
@@ -446,54 +471,65 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
 
                         <div className="space-y-4">
                             <div>
-                                <label className="block text-sm font-bold text-slate-600 mb-2">روابط (Webhooks)</label>
+                                <label className="block text-sm font-bold text-slate-600 mb-2">إضافة رابط جديد</label>
 
-                                <div className="flex gap-2 mb-4">
-                                    <input
-                                        type="url"
-                                        className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-left font-mono text-sm"
-                                        placeholder="https://n8n.your-domain.com/webhook/..."
-                                        value={webhookUrlInput}
-                                        onChange={(e) => setWebhookUrlInput(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                                e.preventDefault();
-                                                handleAddWebhookUrl();
-                                            }
-                                        }}
-                                        autoFocus
-                                    />
-                                    <button
-                                        onClick={handleAddWebhookUrl}
-                                        disabled={!webhookUrlInput.trim()}
-                                        className="bg-emerald-500 text-white px-4 rounded-xl hover:bg-emerald-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        <Plus size={20} />
-                                    </button>
+                                <div className="flex flex-col gap-2 mb-4">
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            className="w-1/3 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-right text-sm"
+                                            placeholder="اسم (مثلاً: n8n)"
+                                            value={webhookNameInput}
+                                            onChange={(e) => setWebhookNameInput(e.target.value)}
+                                        />
+                                        <input
+                                            type="url"
+                                            className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-left font-mono text-sm"
+                                            placeholder="https://..."
+                                            value={webhookUrlInput}
+                                            onChange={(e) => setWebhookUrlInput(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    handleAddWebhook();
+                                                }
+                                            }}
+                                        />
+                                        <button
+                                            onClick={handleAddWebhook}
+                                            disabled={!webhookUrlInput.trim()}
+                                            className="bg-emerald-500 text-white px-4 rounded-xl hover:bg-emerald-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            <Plus size={20} />
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div className="space-y-2 max-h-60 overflow-y-auto mb-2 custom-scrollbar">
-                                    {webhookUrlsList.length === 0 && (
+                                    {webhooksList.length === 0 && (
                                         <p className="text-center text-slate-400 py-4 text-sm bg-slate-50 rounded-xl border border-dashed border-slate-200">
                                             لا توجد روابط مضافة.
                                         </p>
                                     )}
-                                    {webhookUrlsList.map((url, idx) => (
-                                        <div key={idx} className="flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-200 group">
-                                            <code className="flex-1 text-xs font-mono text-slate-600 break-all">{url}</code>
+                                    {webhooksList.map((w, idx) => (
+                                        <div key={idx} className="flex items-center gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200 hover:border-emerald-200 transition-colors group">
+                                            <div className="flex flex-col flex-1 overflow-hidden">
+                                                <span className="text-xs font-bold text-slate-700 truncate">{w.name}</span>
+                                                <code className="text-[10px] font-mono text-slate-500 truncate mt-0.5" title={w.url}>{w.url}</code>
+                                            </div>
                                             <button
-                                                onClick={() => handleRemoveWebhookUrl(url)}
-                                                className="text-slate-400 hover:text-red-500 p-1 transition-colors"
+                                                onClick={() => handleRemoveWebhook(w.url)}
+                                                className="text-slate-400 hover:text-red-500 p-2 rounded-full hover:bg-red-50 transition-colors"
                                                 title="حذف"
                                             >
-                                                <Trash2 size={14} />
+                                                <Trash2 size={16} />
                                             </button>
                                         </div>
                                     ))}
                                 </div>
 
                                 <p className="text-xs text-slate-400 mt-2">
-                                    سيتم إرسال نسخة من جميع الرسائل الواردة إلى كل الروابط أعلاه (POST).
+                                    سيتم إرسال الإشعارات إلى جميع الروابط المفعلة في القائمة.
                                 </p>
                             </div>
 
@@ -501,7 +537,7 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                 onClick={handleSaveWebhook}
                                 className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition-colors shadow-lg shadow-blue-500/20"
                             >
-                                حفظ التغييرات ({webhookUrlsList.length})
+                                حفظ التغييرات ({webhooksList.length})
                             </button>
                         </div>
                     </div>

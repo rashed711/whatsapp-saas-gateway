@@ -303,7 +303,8 @@ app.get('/api/sessions', authenticateToken, async (req: any, res) => {
             name: s.name,
             status: s.engine.currentStatus,
             webhookUrl: s.webhookUrl, // Include Webhook URL
-            webhookUrls: s.webhookUrls || [] // Include Multiple Webhook URLs
+            webhookUrls: s.webhookUrls || [], // Legacy
+            webhooks: s.webhooks || [] // New: Named Webhooks
         }));
     res.json(userSessions);
 });
@@ -525,7 +526,7 @@ app.post('/api/sessions/:sessionId/messages', authenticateToken, async (req: any
 // Configure Webhook URL
 app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, res) => {
     const { sessionId } = req.params;
-    const { webhookUrl, webhookUrls } = req.body;
+    const { webhookUrl, webhookUrls, webhooks } = req.body;
 
     // Isolation Check
     const session = await storage.getItem('sessions', { id: sessionId });
@@ -534,11 +535,23 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
     }
 
     try {
+        // Validate Webhooks Structure
+        let textWebhooks: any[] = [];
+        if (webhooks && Array.isArray(webhooks)) {
+            textWebhooks = webhooks.filter((w: any) => w.url && w.url.trim() !== '');
+            // Ensure name is present
+            textWebhooks = textWebhooks.map(w => ({
+                name: w.name || 'Webhook',
+                url: w.url
+            }));
+        }
+
         // Merge with existing session data to avoid validation errors or data loss
         const updatedSession = {
             ...session,
             webhookUrl: webhookUrl || '',
-            webhookUrls: Array.isArray(webhookUrls) ? webhookUrls : (session.webhookUrls || [])
+            webhookUrls: Array.isArray(webhookUrls) ? webhookUrls : (session.webhookUrls || []),
+            webhooks: textWebhooks
         };
 
         // If webhookUrl is updated but webhookUrls is not provided/empty, we can optionally sync them
@@ -552,7 +565,7 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
         delete updatedSession.updatedAt;
 
         await storage.saveItem('sessions', updatedSession);
-        res.json({ success: true, message: 'Webhook URL updated', webhookUrl, webhookUrls: updatedSession.webhookUrls });
+        res.json({ success: true, message: 'Webhook URL updated', webhookUrl, webhookUrls: updatedSession.webhookUrls, webhooks: updatedSession.webhooks });
     } catch (error: any) {
         console.error('Webhook save error:', error);
         // Expose the actual error message to the client for debugging
@@ -647,7 +660,8 @@ io.on('connection', (socket) => {
                 name: s.name,
                 status: s.engine.currentStatus,
                 webhookUrl: s.webhookUrl,
-                webhookUrls: s.webhookUrls || []
+                webhookUrls: s.webhookUrls || [],
+                webhooks: s.webhooks || []
             }));
         socket.emit('sessions-list', userSessions);
     });

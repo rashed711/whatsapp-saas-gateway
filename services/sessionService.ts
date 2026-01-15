@@ -8,7 +8,8 @@ export interface ActiveSession {
     userId: string;
     engine: WhatsAppEngine;
     webhookUrl?: string; // Legacy
-    webhookUrls?: string[]; // New
+    webhookUrls?: string[]; // Legacy
+    webhooks?: { name: string; url: string }[]; // New
 }
 
 export class SessionService {
@@ -32,7 +33,8 @@ export class SessionService {
                     name: s.name,
                     userId: s.userId,
                     webhookUrl: s.webhookUrl,
-                    webhookUrls: s.webhookUrls || [], // Load from storage
+                    webhookUrls: s.webhookUrls || [],
+                    webhooks: s.webhooks || [],
                     engine
                 });
 
@@ -76,8 +78,9 @@ export class SessionService {
         const engine = new WhatsAppEngine(userId, sessionId);
         const webhookUrl = ''; // Default empty
         const webhookUrls: string[] = []; // Default empty
+        const webhooks: { name: string; url: string }[] = []; // Default empty
 
-        this.sessions.set(sessionId, { id: sessionId, name, userId, engine, webhookUrl, webhookUrls });
+        this.sessions.set(sessionId, { id: sessionId, name, userId, engine, webhookUrl, webhookUrls, webhooks });
 
         try {
             await storage.saveItem('sessions', { id: sessionId, name, userId, status: 'IDLE', webhookUrl });
