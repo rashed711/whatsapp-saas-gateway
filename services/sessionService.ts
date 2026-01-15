@@ -156,4 +156,15 @@ export class SessionService {
             if (s) { s.status = status; storage.saveItem('sessions', s); }
         });
     }
+
+    static updateSessionWebhooks(sessionId: string, webhooks: { name: string, url: string }[]) {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+            session.webhooks = webhooks;
+            // Also clear legacy fields to avoid confusion
+            session.webhookUrl = '';
+            session.webhookUrls = [];
+            this.sessions.set(sessionId, session);
+        }
+    }
 }

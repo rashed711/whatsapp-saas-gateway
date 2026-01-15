@@ -565,6 +565,10 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
         delete updatedSession.updatedAt;
 
         await storage.saveItem('sessions', updatedSession);
+
+        // Sync in-memory cache
+        SessionService.updateSessionWebhooks(sessionId, updatedSession.webhooks);
+
         res.json({ success: true, message: 'Webhook URL updated', webhookUrl, webhookUrls: updatedSession.webhookUrls, webhooks: updatedSession.webhooks });
     } catch (error: any) {
         console.error('Webhook save error:', error);
