@@ -229,11 +229,21 @@ export class WhatsAppEngine {
 
             const pushName = msg.pushName;
 
-            // --- Webhook Trigger (n8n) ---
+            // --- Webhook Trigger (n8n & Multiple) ---
             try {
               const session = await storage.getItem('sessions', { id: this.sessionId });
-              if (session && session.webhookUrl) {
-                console.log(`[Webhook] Reforwarding message from ${remoteJid} to ${session.webhookUrl}`);
+
+              // Collect all unique URLs
+              const targets = new Set<string>();
+              if (session?.webhookUrl) targets.add(session.webhookUrl);
+              if (session?.webhookUrls && Array.isArray(session.webhookUrls)) {
+                session.webhookUrls.forEach((url: string) => {
+                  if (url && typeof url === 'string') targets.add(url);
+                });
+              }
+
+              if (targets.size > 0) {
+                console.log(`[Webhook] Reforwarding message from ${remoteJid} to ${targets.size} endpoints.`);
 
                 // Determine message type and content
                 let msgType = 'text';
@@ -268,12 +278,17 @@ export class WhatsAppEngine {
                   full_message: msg
                 };
 
-                // Fire and Forget (Don't await to avoid blocking auto-reply)
-                fetch(session.webhookUrl, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(payload)
-                }).catch(err => console.error(`[Webhook] Failed to send to ${session.webhookUrl}:`, err.message));
+                // Dispatch to all targets (Fire and Forget)
+                const promises = Array.from(targets).map(url =>
+                  fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                  }).catch(err => console.error(`[Webhook] Failed to send to ${url}:`, err.message))
+                );
+
+                // We don't await all to avoid blocking, but maybe we should await Promise.allSettled slightly?
+                // The original code didn't await. Let's keep it async.
               }
             } catch (whErr) {
               console.error('[Webhook] Error:', whErr);

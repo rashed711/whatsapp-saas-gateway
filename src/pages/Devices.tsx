@@ -8,6 +8,7 @@ interface Session {
     status: 'IDLE' | 'QR' | 'CONNECTED' | 'ERROR' | 'connecting' | 'disconnected';
     qr?: string;
     webhookUrl?: string; // Add this
+    webhookUrls?: string[]; // Add this
 }
 
 interface DevicesProps {
@@ -146,7 +147,22 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
 
     const [showWebhookModal, setShowWebhookModal] = useState(false);
     const [webhookUrlInput, setWebhookUrlInput] = useState('');
+    const [webhookUrlsList, setWebhookUrlsList] = useState<string[]>([]);
     const [selectedSessionWebhook, setSelectedSessionWebhook] = useState<Session | null>(null);
+
+    const handleAddWebhookUrl = () => {
+        if (!webhookUrlInput.trim()) return;
+        if (webhookUrlsList.includes(webhookUrlInput.trim())) {
+            alert('هذا الرابط مضاف بالفعل');
+            return;
+        }
+        setWebhookUrlsList([...webhookUrlsList, webhookUrlInput.trim()]);
+        setWebhookUrlInput('');
+    };
+
+    const handleRemoveWebhookUrl = (urlToRemove: string) => {
+        setWebhookUrlsList(webhookUrlsList.filter(url => url !== urlToRemove));
+    };
 
     const handleSaveWebhook = async () => {
         if (!selectedSessionWebhook) return;
@@ -154,26 +170,39 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
         try {
             const token = localStorage.getItem('token');
             const baseUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || `${window.location.protocol}//${window.location.hostname}:3050`;
+
+            // Sync legacy logic with new logic
+            // If the list is empty but input has text, maybe user forgot to click add? 
+            // Let's assume user intends to save the list.
+
             const response = await fetch(`${baseUrl}/api/sessions/${selectedSessionWebhook.id}/webhook`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ webhookUrl: webhookUrlInput })
+                body: JSON.stringify({
+                    webhookUrl: webhookUrlsList.length > 0 ? webhookUrlsList[0] : '', // Legacy fallback
+                    webhookUrls: webhookUrlsList
+                })
             });
 
             if (response.ok) {
                 // Update local state to reflect change immediately
+                const updatedData = await response.json();
                 setSessions(prev => prev.map(s =>
-                    s.id === selectedSessionWebhook.id ? { ...s, webhookUrl: webhookUrlInput } : s
+                    s.id === selectedSessionWebhook.id ? {
+                        ...s,
+                        webhookUrl: updatedData.webhookUrl,
+                        webhookUrls: updatedData.webhookUrls
+                    } : s
                 ));
                 setShowWebhookModal(false);
-                alert('تم حفظ رابط الويب هوك بنجاح');
+                alert('تم حفظ روابط الويب هوك بنجاح');
             } else {
                 const data = await response.json();
                 console.error('Save failed:', data);
-                alert('فشل حفظ الرابط: ' + (data.details || data.error || 'خطأ غير معروف'));
+                alert('فشل حفظ الروابط: ' + (data.details || data.error || 'خطأ غير معروف'));
             }
         } catch (error: any) {
             console.error(error);
@@ -294,7 +323,12 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                     <button
                                         onClick={() => {
                                             setSelectedSessionWebhook(session);
-                                            setWebhookUrlInput(session.webhookUrl || '');
+                                            setWebhookUrlInput('');
+                                            // Initialize list from session data, handling both legacy and new
+                                            const existing = session.webhookUrls && session.webhookUrls.length > 0
+                                                ? session.webhookUrls
+                                                : session.webhookUrl ? [session.webhookUrl] : [];
+                                            setWebhookUrlsList(existing);
                                             setShowWebhookModal(true);
                                         }}
                                         className="w-full py-2 text-purple-400 hover:text-purple-600 text-xs font-bold transition-colors flex items-center justify-center gap-1 border-t border-slate-50 pt-2"
@@ -412,17 +446,54 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
 
                         <div className="space-y-4">
                             <div>
-                                <label className="block text-sm font-bold text-slate-600 mb-2">رابط (Webhook URL)</label>
-                                <input
-                                    type="url"
-                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-left font-mono text-sm"
-                                    placeholder="https://n8n.your-domain.com/webhook/..."
-                                    value={webhookUrlInput}
-                                    onChange={(e) => setWebhookUrlInput(e.target.value)}
-                                    autoFocus
-                                />
+                                <label className="block text-sm font-bold text-slate-600 mb-2">روابط (Webhooks)</label>
+
+                                <div className="flex gap-2 mb-4">
+                                    <input
+                                        type="url"
+                                        className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500 transition-colors text-left font-mono text-sm"
+                                        placeholder="https://n8n.your-domain.com/webhook/..."
+                                        value={webhookUrlInput}
+                                        onChange={(e) => setWebhookUrlInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                handleAddWebhookUrl();
+                                            }
+                                        }}
+                                        autoFocus
+                                    />
+                                    <button
+                                        onClick={handleAddWebhookUrl}
+                                        disabled={!webhookUrlInput.trim()}
+                                        className="bg-emerald-500 text-white px-4 rounded-xl hover:bg-emerald-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <Plus size={20} />
+                                    </button>
+                                </div>
+
+                                <div className="space-y-2 max-h-60 overflow-y-auto mb-2 custom-scrollbar">
+                                    {webhookUrlsList.length === 0 && (
+                                        <p className="text-center text-slate-400 py-4 text-sm bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                                            لا توجد روابط مضافة.
+                                        </p>
+                                    )}
+                                    {webhookUrlsList.map((url, idx) => (
+                                        <div key={idx} className="flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-200 group">
+                                            <code className="flex-1 text-xs font-mono text-slate-600 break-all">{url}</code>
+                                            <button
+                                                onClick={() => handleRemoveWebhookUrl(url)}
+                                                className="text-slate-400 hover:text-red-500 p-1 transition-colors"
+                                                title="حذف"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+
                                 <p className="text-xs text-slate-400 mt-2">
-                                    سيتم إرسال جميع الرسائل الواردة إلى هذا الرابط (POST).
+                                    سيتم إرسال نسخة من جميع الرسائل الواردة إلى كل الروابط أعلاه (POST).
                                 </p>
                             </div>
 
@@ -430,7 +501,7 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                 onClick={handleSaveWebhook}
                                 className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition-colors shadow-lg shadow-blue-500/20"
                             >
-                                حفظ الإعدادات
+                                حفظ التغييرات ({webhookUrlsList.length})
                             </button>
                         </div>
                     </div>

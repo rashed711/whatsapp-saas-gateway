@@ -302,7 +302,8 @@ app.get('/api/sessions', authenticateToken, async (req: any, res) => {
             id: s.id,
             name: s.name,
             status: s.engine.currentStatus,
-            webhookUrl: s.webhookUrl // Include Webhook URL
+            webhookUrl: s.webhookUrl, // Include Webhook URL
+            webhookUrls: s.webhookUrls || [] // Include Multiple Webhook URLs
         }));
     res.json(userSessions);
 });
@@ -524,7 +525,7 @@ app.post('/api/sessions/:sessionId/messages', authenticateToken, async (req: any
 // Configure Webhook URL
 app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, res) => {
     const { sessionId } = req.params;
-    const { webhookUrl } = req.body;
+    const { webhookUrl, webhookUrls } = req.body;
 
     // Isolation Check
     const session = await storage.getItem('sessions', { id: sessionId });
@@ -534,7 +535,16 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
 
     try {
         // Merge with existing session data to avoid validation errors or data loss
-        const updatedSession = { ...session, webhookUrl: webhookUrl || '' };
+        const updatedSession = {
+            ...session,
+            webhookUrl: webhookUrl || '',
+            webhookUrls: Array.isArray(webhookUrls) ? webhookUrls : (session.webhookUrls || [])
+        };
+
+        // If webhookUrl is updated but webhookUrls is not provided/empty, we can optionally sync them
+        // But for now, let's keep them independent or allow the frontend to manage logic.
+        // Actually, if the user provides a legacy webhookUrl, we should ensure it's in the list too?
+        // Let's stick to the plan: explicit updates.
 
         // Clean up fields that shouldn't be updated manually or cause Mongoose errors
         if (updatedSession._id) delete updatedSession._id;
@@ -542,7 +552,7 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
         delete updatedSession.updatedAt;
 
         await storage.saveItem('sessions', updatedSession);
-        res.json({ success: true, message: 'Webhook URL updated', webhookUrl });
+        res.json({ success: true, message: 'Webhook URL updated', webhookUrl, webhookUrls: updatedSession.webhookUrls });
     } catch (error: any) {
         console.error('Webhook save error:', error);
         // Expose the actual error message to the client for debugging
@@ -635,7 +645,9 @@ io.on('connection', (socket) => {
             .map(s => ({
                 id: s.id,
                 name: s.name,
-                status: s.engine.currentStatus
+                status: s.engine.currentStatus,
+                webhookUrl: s.webhookUrl,
+                webhookUrls: s.webhookUrls || []
             }));
         socket.emit('sessions-list', userSessions);
     });
@@ -698,10 +710,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// ---------------------------------------------------------
-// KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
-// ---------------------------------------------------------
-// ---------------------------------------------------------
 // ---------------------------------------------------------
 // KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
 // ---------------------------------------------------------
