@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, Plus, Pause, Play, Trash2, CheckCircle, AlertTriangle, RefreshCw, Edit2, FileText, X } from 'lucide-react';
+import { Calendar, Clock, Plus, Pause, Play, Trash2, CheckCircle, AlertTriangle, RefreshCw, Edit2, FileText, X, Copy } from 'lucide-react';
 
 const getApiUrl = () => {
     let url = import.meta.env.VITE_API_URL || 'http://localhost:3050';
@@ -280,7 +280,7 @@ const ScheduledCampaigns = () => {
                                 <div className="flex items-center gap-4 text-sm text-slate-500">
                                     <span className="flex items-center gap-1">
                                         <Clock size={16} />
-                                        {new Date(camp.scheduledTime).toLocaleString('ar-EG')}
+                                        {new Date(camp.scheduledTime).toLocaleString('en-GB')}
                                     </span>
                                     <span>•</span>
                                     <span>{camp.recipients.length} مستلم</span>
@@ -566,9 +566,9 @@ const ScheduledCampaigns = () => {
                             <div>
                                 <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                                     <FileText size={24} className="text-emerald-500" />
-                                    تقرير الحملة: {viewCampaign.title}
+                                    Campaign Report: {viewCampaign.title}
                                 </h3>
-                                <p className="text-sm text-slate-500 mt-1">تاريخ الإنشاء: {new Date(viewCampaign.scheduledTime).toLocaleString('ar-EG')}</p>
+                                <p className="text-sm text-slate-500 mt-1">Created at: {new Date(viewCampaign.scheduledTime).toLocaleString('en-GB')}</p>
                             </div>
                             <button onClick={() => setViewCampaign(null)} className="text-slate-400 hover:text-red-500">
                                 <X size={24} />
