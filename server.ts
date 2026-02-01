@@ -12,6 +12,7 @@ import { SessionService } from './services/sessionService.js';
 import { AutoReplyService } from './services/autoReplyService.js';
 import { IUser } from './models/User.js';
 import { ISession } from './models/Session.js';
+import { ISetting } from './models/Setting.js';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -134,6 +135,44 @@ app.get('/api/version', (req: any, res: any) => {
     });
 });
 
+// --- Settings Routes ---
+
+// Get System Settings (Public to allow Login page to show name)
+app.get('/api/settings', async (req: any, res: any) => {
+    try {
+        const settings = await storage.getItems('settings');
+        // Convert array to object { key: value }
+        const settingsObj = settings.reduce((acc: any, curr: any) => {
+            acc[curr.key] = curr.value;
+            return acc;
+        }, {});
+
+        // Default if not set
+        if (!settingsObj.systemName) settingsObj.systemName = 'Gateway WA';
+
+        res.json(settingsObj);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+
+// Update Settings (Admin Only)
+app.put('/api/settings', authenticateToken, requireAdmin, async (req: any, res: any) => {
+    try {
+        const { systemName } = req.body;
+        console.log('Updating settings:', req.body);
+
+        if (systemName) {
+            await storage.saveItem('settings', { key: 'systemName', value: systemName });
+        }
+
+        res.json({ success: true, message: 'Settings updated' });
+    } catch (error) {
+        console.error('Settings update error:', error);
+        res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
+
 // --- Auth Routes ---
 
 // Register (Now Protected - Admin Only)
@@ -141,7 +180,7 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any,
     console.log('--> REGISTER REQUEST RECEIVED');
     console.log('Body:', JSON.stringify(req.body, null, 2));
     try {
-        const { name, username, password } = req.body;
+        const { name, username, password, permissions } = req.body;
         if (!name || !username || !password) return res.status(400).json({ error: 'Missing fields' });
 
         const existingUser = await storage.getItem('users', { username });
@@ -152,7 +191,9 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any,
             name,
             username,
             password: hashedPassword,
+            password: hashedPassword,
             role: 'user',
+            permissions: permissions || [],
             isActive: true
         });
 
@@ -190,7 +231,7 @@ app.post('/api/auth/login', async (req, res) => {
         if (!validPassword) return res.status(400).json({ error: 'Invalid password' });
 
         const token = jwt.sign({ userId: user._id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ token, user: { id: user._id, name: user.name, username: user.username, role: user.role } });
+        res.json({ token, user: { id: user._id, name: user.name, username: user.username, role: user.role, permissions: user.permissions || [] } });
     } catch (error) {
         console.error('Login error', error);
         res.status(500).json({ error: 'Internal Server Error' });
@@ -229,7 +270,7 @@ app.get('/api/users', authenticateToken, requireAdmin, async (req: any, res) => 
 app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res) => {
     try {
         const { id } = req.params;
-        const { name, username, password, isActive } = req.body;
+        const { name, username, password, isActive, permissions } = req.body;
 
         // Prevent suspending Admin
         const targetUser = await storage.getItem('users', { _id: id });
@@ -240,6 +281,8 @@ app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res)
         }
 
         const updateData: any = { _id: id, name, username, isActive };
+        if (permissions) updateData.permissions = permissions;
+
         if (password && password.trim() !== '') {
             updateData.password = await bcrypt.hash(password, 10);
         }

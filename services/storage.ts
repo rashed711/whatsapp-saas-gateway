@@ -1,5 +1,5 @@
 import { connectDB } from './db.js';
-import { User, Session, Contact, Message, MutedChat } from '../models/index.js';
+import { User, Session, Contact, Message, MutedChat, Setting } from '../models/index.js';
 import { AutoReply } from '../models/AutoReply.js';
 
 class MongoStorage {
@@ -19,6 +19,7 @@ class MongoStorage {
             case 'messages': return Message;
             case 'autoreplies': return AutoReply;
             case 'muted_chats': return MutedChat;
+            case 'settings': return Setting;
             default: throw new Error(`Unknown collection: ${collection}`);
         }
     }

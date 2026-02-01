@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Lock, AlertCircle, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Lock, AlertCircle, CheckCircle, Globe } from 'lucide-react';
 
 const Settings = () => {
     const [formData, setFormData] = useState({
@@ -7,9 +7,61 @@ const Settings = () => {
         newPassword: '',
         confirmPassword: ''
     });
+    const [systemName, setSystemName] = useState('');
+    const [initialSystemName, setInitialSystemName] = useState('');
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [loading, setLoading] = useState(false);
+
+
+    const [settingsLoading, setSettingsLoading] = useState(false);
+
+    useEffect(() => {
+        const fetchSettings = async () => {
+            try {
+                let API_URL = import.meta.env.VITE_API_URL || '';
+                if (API_URL.endsWith('/')) API_URL = API_URL.slice(0, -1);
+                const res = await fetch(`${API_URL}/api/settings`);
+                const data = await res.json();
+                if (data.systemName) {
+                    setSystemName(data.systemName);
+                    setInitialSystemName(data.systemName);
+                }
+            } catch (error) {
+                console.error('Failed to fetch settings', error);
+            }
+        };
+        fetchSettings();
+    }, []);
+
+    const handleSystemNameSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError(''); setSuccess('');
+        setSettingsLoading(true);
+
+        try {
+            let API_URL = import.meta.env.VITE_API_URL || '';
+            if (API_URL.endsWith('/')) API_URL = API_URL.slice(0, -1);
+            const token = localStorage.getItem('token');
+            const response = await fetch(`${API_URL}/api/settings`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ systemName }),
+            });
+
+            if (!response.ok) throw new Error('Failed to update settings');
+
+            setSuccess('تم تحديث اسم النظام بنجاح (يرجى تحديث الصفحة)');
+            setInitialSystemName(systemName);
+        } catch (err: any) {
+            setError(err.message);
+        } finally {
+            setSettingsLoading(false);
+        }
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -79,6 +131,35 @@ const Settings = () => {
                         <CheckCircle size={16} /> {success}
                     </div>
                 )}
+
+
+
+                {/* System Name Settings */}
+                <form onSubmit={handleSystemNameSubmit} className="mb-10 pb-10 border-b border-slate-200">
+                    <h3 className="text-lg font-bold text-slate-700 mb-6 flex items-center gap-2">
+                        <Globe size={20} className="text-emerald-500" />
+                        إعدادات النظام
+                    </h3>
+                    <div className="flex gap-4 items-end">
+                        <div className="flex-1">
+                            <label className="block text-sm font-medium text-slate-500 mb-1">اسم النظام</label>
+                            <input
+                                type="text"
+                                value={systemName}
+                                onChange={(e) => setSystemName(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl focus:outline-none focus:border-emerald-500"
+                                placeholder="Gateway WA"
+                            />
+                        </div>
+                        <button
+                            type="submit"
+                            disabled={settingsLoading || systemName === initialSystemName}
+                            className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-6 rounded-xl transition-all disabled:opacity-50 h-[50px]"
+                        >
+                            {settingsLoading ? '...' : 'حفظ'}
+                        </button>
+                    </div>
+                </form>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>

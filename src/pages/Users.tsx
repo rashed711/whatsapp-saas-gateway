@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { UserPlus, User, Lock, AlertCircle, Trash2, Edit2, Ban, CheckCircle, X } from 'lucide-react';
+import { UserPlus, User, Lock, AlertCircle, Trash2, Edit2, Ban, CheckCircle, X, Shield } from 'lucide-react';
+
+const AVAILABLE_PERMISSIONS = [
+    { id: 'devices', label: 'الأجهزة المتصلة' },
+    { id: 'campaigns', label: 'إرسال الحملات' },
+    { id: 'autoreply', label: 'الرد الآلي' },
+];
 
 const Users = () => {
     const [users, setUsers] = useState<any[]>([]);
 
     // Create Form State
-    const [createForm, setCreateForm] = useState({ name: '', username: '', password: '' });
+    const [createForm, setCreateForm] = useState({ name: '', username: '', password: '', permissions: [] as string[] });
 
     // Edit Form State
     const [editingUser, setEditingUser] = useState<any | null>(null);
-    const [editForm, setEditForm] = useState({ name: '', username: '', password: '', isActive: true });
+    const [editForm, setEditForm] = useState({ name: '', username: '', password: '', isActive: true, permissions: [] as string[] });
 
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
@@ -56,7 +62,7 @@ const Users = () => {
             if (!response.ok) throw new Error(data.error || 'Failed to create user');
 
             setSuccess('تم إنشاء المستخدم بنجاح');
-            setCreateForm({ name: '', username: '', password: '' });
+            setCreateForm({ name: '', username: '', password: '', permissions: [] });
             fetchUsers();
         } catch (err: any) {
             setError(err.message);
@@ -71,7 +77,8 @@ const Users = () => {
             name: user.name,
             username: user.username,
             password: '',
-            isActive: user.isActive
+            isActive: user.isActive,
+            permissions: user.permissions || []
         });
         setError(''); setSuccess('');
     };
@@ -156,6 +163,28 @@ const Users = () => {
                     <input type="text" placeholder="الاسم" value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} className="bg-slate-50 border p-3 rounded-xl" required />
                     <input type="text" placeholder="اسم المستخدم" value={createForm.username} onChange={(e) => setCreateForm({ ...createForm, username: e.target.value })} className="bg-slate-50 border p-3 rounded-xl" required />
                     <input type="password" placeholder="كلمة المرور" value={createForm.password} onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })} className="bg-slate-50 border p-3 rounded-xl" required />
+                    <div className="md:col-span-3 border-t border-slate-100 pt-3 mt-1">
+                        <label className="block text-sm font-medium text-slate-500 mb-2">الصلاحيات المصرح بها:</label>
+                        <div className="flex gap-4 flex-wrap">
+                            {AVAILABLE_PERMISSIONS.map(perm => (
+                                <label key={perm.id} className="flex items-center gap-2 cursor-pointer bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
+                                    <input
+                                        type="checkbox"
+                                        className="w-4 h-4 accent-emerald-500"
+                                        checked={createForm.permissions.includes(perm.id)}
+                                        onChange={(e) => {
+                                            const newPerms = e.target.checked
+                                                ? [...createForm.permissions, perm.id]
+                                                : createForm.permissions.filter(p => p !== perm.id);
+                                            setCreateForm({ ...createForm, permissions: newPerms });
+                                        }}
+                                    />
+                                    <span className="text-sm">{perm.label}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+
                     <div className="md:col-span-3 flex justify-end">
                         <button type="submit" disabled={loading} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-8 rounded-xl transition-all disabled:opacity-50">
                             {loading ? 'جاري الإضافة...' : 'إضافة المستخدم'}
@@ -237,10 +266,33 @@ const Users = () => {
                                 <label className="block text-sm mb-1">كلمة المرور الجديدة (اختياري)</label>
                                 <input type="password" value={editForm.password} onChange={(e) => setEditForm({ ...editForm, password: e.target.value })} className="w-full border p-2 rounded-lg" placeholder="اتركها فارغة للإبقاء على القديمة" />
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="space-y-2 mt-4">
+                                <label className="block text-sm font-medium text-slate-700">الصلاحيات</label>
+                                <div className="space-y-2 max-h-40 overflow-y-auto p-2 bg-slate-50 rounded-lg border border-slate-100">
+                                    {AVAILABLE_PERMISSIONS.map(perm => (
+                                        <label key={perm.id} className="flex items-center gap-2 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                className="w-4 h-4 accent-emerald-500"
+                                                checked={editForm.permissions.includes(perm.id)}
+                                                onChange={(e) => {
+                                                    const newPerms = e.target.checked
+                                                        ? [...editForm.permissions, perm.id]
+                                                        : editForm.permissions.filter(p => p !== perm.id);
+                                                    setEditForm({ ...editForm, permissions: newPerms });
+                                                }}
+                                            />
+                                            <span className="text-sm">{perm.label}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 mt-4">
                                 <input type="checkbox" checked={editForm.isActive} onChange={(e) => setEditForm({ ...editForm, isActive: e.target.checked })} className="w-5 h-5 accent-emerald-500" />
                                 <label>حساب نشط</label>
                             </div>
+
                             <div className="flex gap-3 mt-6">
                                 <button type="submit" className="flex-1 bg-emerald-500 text-white py-2 rounded-lg font-bold hover:bg-emerald-600">حفظ التغييرات</button>
                                 <button type="button" onClick={() => setEditingUser(null)} className="flex-1 bg-slate-100 text-slate-600 py-2 rounded-lg font-bold hover:bg-slate-200">إلغاء</button>

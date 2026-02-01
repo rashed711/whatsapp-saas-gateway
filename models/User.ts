@@ -5,6 +5,7 @@ export interface IUser extends Document {
     username: string; // Used as email/login id
     password?: string;
     role: 'admin' | 'user';
+    permissions?: string[];
     isActive?: boolean;
     createdAt?: string;
     updatedAt?: string;
@@ -15,6 +16,7 @@ const UserSchema = new Schema<IUser>({
     username: { type: String, required: true, unique: true },
     password: { type: String },
     role: { type: String, enum: ['admin', 'user'], default: 'user' },
+    permissions: { type: [String], default: [] },
     isActive: { type: Boolean, default: true }
 }, {
     timestamps: true

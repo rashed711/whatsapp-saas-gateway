@@ -4,9 +4,10 @@ import { LogIn, Mail, Lock, AlertCircle } from 'lucide-react';
 
 interface LoginProps {
     onLogin: () => void;
+    systemName: string;
 }
 
-const Login: React.FC<LoginProps> = ({ onLogin }) => {
+const Login: React.FC<LoginProps> = ({ onLogin, systemName }) => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
@@ -64,7 +65,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             <div className="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-700">
                 <div className="text-center mb-8">
                     <h1 className="text-3xl font-bold text-white mb-2 flex items-center justify-center gap-2">
-                        <span className="text-emerald-500">WA</span> Gateway
+                        <span className="text-emerald-500">WA</span> {systemName}
                     </h1>
                     <p className="text-slate-400">تسجيل الدخول إلى لوحة التحكم</p>
                 </div>

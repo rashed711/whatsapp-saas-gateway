@@ -5,3 +5,4 @@ export * from './Message.js';
 export * from './AutoReply.js';
 export * from './AuthState.js';
 export * from './MutedChat.js';
+export * from './Setting.js';

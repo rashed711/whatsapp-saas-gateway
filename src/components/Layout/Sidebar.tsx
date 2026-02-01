@@ -6,21 +6,30 @@ interface SidebarProps {
     onLogout: () => void;
     isOpen: boolean;
     onClose: () => void;
+    systemName: string;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose }) => {
+const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose, systemName }) => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
     const isAdmin = user.role === 'admin';
 
-    const links = [
-        { to: '/', icon: <LayoutDashboard size={20} />, label: 'لوحة التحكم' },
-        { to: '/devices', icon: <Smartphone size={20} />, label: 'الأجهزة المتصلة' },
-        { to: '/campaigns', icon: <Send size={20} />, label: 'إرسال الحملات' },
-        { to: '/autoreply', icon: <Bot size={20} />, label: 'الرد الآلي' },
+    const allLinks: { to: string; icon: React.ReactNode; label: string; permission?: string }[] = [
+        { to: '/devices', icon: <Smartphone size={20} />, label: 'الأجهزة المتصلة', permission: 'devices' },
+        { to: '/campaigns', icon: <Send size={20} />, label: 'إرسال الحملات', permission: 'campaigns' },
+        { to: '/autoreply', icon: <Bot size={20} />, label: 'الرد الآلي', permission: 'autoreply' },
     ];
+
+    const links = allLinks.filter(link => {
+        if (isAdmin) return true;
+        // If user has no permissions array (legacy), show all by default OR show none? 
+        // Plan said: "Existing standard users will default to having access to all current tabs"
+        if (!user.permissions || user.permissions.length === 0) return true;
+        return user.permissions.includes(link.permission);
+    });
 
     if (isAdmin) {
         links.push({ to: '/users', icon: <Users size={20} />, label: 'المستخدمين' });
+        links.push({ to: '/settings', icon: <Settings size={20} />, label: 'الإعدادات' });
     }
 
     return (
@@ -43,7 +52,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose }) => {
             `}>
                 <div className="p-6 border-b border-slate-800 flex justify-between items-center">
                     <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-                        <span className="text-emerald-500">WA</span> Gateway
+                        <span className="text-emerald-500">WA</span> {systemName}
                     </h1>
                     {/* Close Button Mobile */}
                     <button
