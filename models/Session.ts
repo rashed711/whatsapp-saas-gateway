@@ -12,6 +12,11 @@ export interface ISession extends Document {
   updatedAt?: string;
 }
 
+const WebhookSchema = new Schema({
+  name: { type: String, required: true },
+  url: { type: String, required: true }
+}, { _id: false });
+
 const SessionSchema = new Schema<ISession>({
   id: { type: String, required: true, unique: true },
   name: { type: String, required: true },
@@ -19,10 +24,7 @@ const SessionSchema = new Schema<ISession>({
   webhookUrl: { type: String }, // Legacy
   webhookUrls: { type: [String], default: [] }, // Legacy
   webhooks: {
-    type: [{
-      name: { type: String, required: true },
-      url: { type: String, required: true }
-    }],
+    type: [WebhookSchema],
     default: []
   },
   status: {

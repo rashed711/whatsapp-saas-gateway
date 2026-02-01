@@ -1,84 +1,46 @@
 
 const mongoose = require('mongoose');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env.local') });
 
 const MONGO_URI = process.env.MONGO_URI || '';
 
 async function run() {
     try {
-        console.log('Connecting to:', MONGO_URI);
+        if (!MONGO_URI) {
+            console.error('MONGO_URI is missing!');
+            return;
+        }
+        console.log('Connecting to DB...');
         await mongoose.connect(MONGO_URI);
         console.log('Connected.');
 
-        // Define Schema Inline
+        // Define Loose Schema to read everything
         const SessionSchema = new mongoose.Schema({
-            id: { type: String, required: true, unique: true },
-            name: { type: String, required: true },
-            userId: { type: String, required: true },
-            webhookUrl: { type: String },
-            status: { type: String, default: 'IDLE' }
-        }, { timestamps: true });
+            id: String,
+            name: String,
+            webhookUrl: String,
+            webhookUrls: [String],
+            webhooks: Array // Use generic Array to see raw data
+        }, { strict: false });
 
-        // Use a random collection name to avoid conflicts
-        const Session = mongoose.model('Session_Debug_' + Date.now(), SessionSchema);
+        const Session = mongoose.model('Session', SessionSchema, 'sessions'); // Force 'sessions' collection
 
-        const testId = 'sess_debug_' + Date.now();
+        const sessions = await Session.find({});
+        console.log(`Found ${sessions.length} sessions.`);
 
-        // 1. Create
-        console.log('Creating session...');
-        const created = await Session.create({
-            id: testId,
-            name: 'Debug Session',
-            userId: 'user_123'
+        sessions.forEach(s => {
+            console.log('------------------------------------------------');
+            console.log(`Session ID: ${s.id}`);
+            console.log(`Name: ${s.name}`);
+            console.log(`Legacy webhookUrl:`, s.webhookUrl);
+            console.log(`Legacy webhookUrls:`, s.webhookUrls);
+            console.log(`New webhooks:`, JSON.stringify(s.webhooks, null, 2));
+            console.log('------------------------------------------------');
         });
-        console.log('Created:', created.toObject());
-
-        // 2. Try Partial Update (The original failure?)
-        console.log('\n--- Attempting Partial Update (id, webhookUrl) ---');
-        try {
-            const partialUpdate = { id: testId, webhookUrl: 'http://partial.com' };
-            const res1 = await Session.findOneAndUpdate({ id: testId }, partialUpdate, {
-                new: true,
-                upsert: true,
-                setDefaultsOnInsert: true
-            });
-            console.log('Partial Update Result:', res1 ? res1.toObject() : null);
-        } catch (e) {
-            console.error('Partial Update FAILED:', e.message);
-        }
-
-        // 3. Try Full Update (The fix attempt)
-        console.log('\n--- Attempting Full Update (spread object) ---');
-        try {
-            // Fetch first
-            const current = await Session.findOne({ id: testId }).lean();
-            if (!current) throw new Error('Not found');
-
-            const fullUpdate = { ...current, webhookUrl: 'http://full.com' };
-
-            // Emulate what I did in server.ts
-            if (fullUpdate._id) delete fullUpdate._id;
-            // Also try deleting __v
-            // delete fullUpdate.__v; 
-            // delete fullUpdate.createdAt;
-            // delete fullUpdate.updatedAt;
-
-            console.log('Full Update Payload keys:', Object.keys(fullUpdate));
-
-            const res2 = await Session.findOneAndUpdate({ id: testId }, fullUpdate, {
-                new: true,
-                upsert: true,
-                setDefaultsOnInsert: true
-            });
-            console.log('Full Update Result:', res2 ? res2.toObject() : null);
-        } catch (e) {
-            console.error('Full Update FAILED:', e.message);
-        }
-
-        console.log('\nCleanup done.');
 
     } catch (err) {
-        console.error('Global Error:', err);
+        console.error('Error:', err);
     } finally {
         await mongoose.disconnect();
     }
