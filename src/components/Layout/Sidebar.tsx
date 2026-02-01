@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Send, Users, Settings, LogOut, FileText, Smartphone, Bot, X } from 'lucide-react';
+import { LayoutDashboard, Send, Users, Settings, LogOut, FileText, Smartphone, Bot, X, Calendar } from 'lucide-react';
 
 interface SidebarProps {
     onLogout: () => void;
@@ -16,6 +16,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose, systemName
     const allLinks: { to: string; icon: React.ReactNode; label: string; permission?: string }[] = [
         { to: '/devices', icon: <Smartphone size={20} />, label: 'الأجهزة المتصلة', permission: 'devices' },
         { to: '/campaigns', icon: <Send size={20} />, label: 'إرسال الحملات', permission: 'campaigns' },
+        { to: '/scheduled-campaigns', icon: <Calendar size={20} />, label: 'جدولة الحملات', permission: 'scheduled_campaigns' },
         { to: '/autoreply', icon: <Bot size={20} />, label: 'الرد الآلي', permission: 'autoreply' },
     ];
 

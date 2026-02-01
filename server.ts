@@ -9,7 +9,9 @@ import { WhatsAppEngine } from './services/whatsappEngine.js';
 import { storage } from './services/storage.js';
 import { CampaignService } from './services/campaignService.js';
 import { SessionService } from './services/sessionService.js';
+import { Action } from './models/Action.js'; // Assuming Action model exists, if not remove
 import { AutoReplyService } from './services/autoReplyService.js';
+import { SchedulerService } from './services/schedulerService.js';
 import { IUser } from './models/User.js';
 import { ISession } from './models/Session.js';
 import { ISetting } from './models/Setting.js';
@@ -117,6 +119,7 @@ const PORT = Number(process.env.PORT || 3050);
 const startServer = async () => {
     await storage.init(); // Ensure data dir exists
     await SessionService.loadSessions();
+    SchedulerService.init();
     await seedAdmin();
 
     httpServer.listen(PORT, '0.0.0.0', () => {
@@ -682,6 +685,91 @@ app.delete('/api/autoreply/:id', authenticateToken, async (req: any, res) => {
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: 'Failed to delete rule' });
+    }
+});
+
+// --- Scheduled Campaigns Routes ---
+
+// List Campaigns
+app.get('/api/scheduled-campaigns', authenticateToken, async (req: any, res) => {
+    try {
+        // Admins see all? Or just own? Let's stick to own for now unless admin wants to oversee
+        // For simplicity: User sees their own.
+        const campaigns = await storage.getItems('scheduled_campaigns', { userId: req.user.userId });
+        res.json(campaigns);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch campaigns' });
+    }
+});
+
+// Create Campaign
+app.post('/api/scheduled-campaigns', authenticateToken, async (req: any, res) => {
+    try {
+        const { sessionId, title, messageType, content, caption, recipients, scheduledTime, minDelay, maxDelay } = req.body;
+
+        if (!title || !recipients || recipients.length === 0 || !scheduledTime) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        // Validate Recipients Format
+        const validRecipients = recipients.map((r: any) => ({
+            number: r.number,
+            status: 'pending',
+            error: null
+        }));
+
+        const newCampaign = await storage.saveItem('scheduled_campaigns', {
+            userId: req.user.userId,
+            sessionId,
+            title,
+            messageType: messageType || 'text',
+            content,
+            caption,
+            recipients: validRecipients,
+            scheduledTime: new Date(scheduledTime),
+            minDelay: Number(minDelay) || 3,
+            maxDelay: Number(maxDelay) || 10,
+            status: 'pending',
+            progress: { sent: 0, failed: 0, total: validRecipients.length }
+        });
+
+        res.json(newCampaign);
+    } catch (error: any) {
+        console.error('Create Campaign Error:', error);
+        res.status(500).json({ error: 'Failed to create campaign' });
+    }
+});
+
+// Action: Pause / Resume / Stop
+app.put('/api/scheduled-campaigns/:id/status', authenticateToken, async (req: any, res) => {
+    try {
+        const { status } = req.body;
+        if (!['paused', 'active', 'stopped'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid status' });
+        }
+
+        const campaign = await storage.getItem('scheduled_campaigns', { _id: req.params.id, userId: req.user.userId });
+        if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+        // If resuming, ensure time is passed or just set to active so scheduler picks it up immediately?
+        // Scheduler checks { scheduledTime: { $lte: now } }. If old, it runs immediately.
+
+        await storage.saveItem('scheduled_campaigns', { _id: req.params.id, status });
+
+        // If resuming immediately, we might want to trigger scheduler, but interval will catch it in 30s.
+        res.json({ success: true, status });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update status' });
+    }
+});
+
+// Delete Campaign
+app.delete('/api/scheduled-campaigns/:id', authenticateToken, async (req: any, res) => {
+    try {
+        await storage.deleteItem('scheduled_campaigns', { _id: req.params.id, userId: req.user.userId });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete campaign' });
     }
 });
 

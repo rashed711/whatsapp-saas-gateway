@@ -4,6 +4,7 @@ import { UserPlus, User, Lock, AlertCircle, Trash2, Edit2, Ban, CheckCircle, X, 
 const AVAILABLE_PERMISSIONS = [
     { id: 'devices', label: 'الأجهزة المتصلة' },
     { id: 'campaigns', label: 'إرسال الحملات' },
+    { id: 'scheduled_campaigns', label: 'جدولة الحملات' },
     { id: 'autoreply', label: 'الرد الآلي' },
 ];
 
