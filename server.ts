@@ -143,7 +143,11 @@ app.get('/api/settings', async (req: any, res: any) => {
         const settings = await storage.getItems('settings');
         // Convert array to object { key: value }
         const settingsObj = settings.reduce((acc: any, curr: any) => {
-            acc[curr.key] = curr.value;
+            // Since settings are sorted by createdAt desc (Newest first),
+            // we only take the first occurrence of each key to ignore old duplicates.
+            if (acc[curr.key] === undefined) {
+                acc[curr.key] = curr.value;
+            }
             return acc;
         }, {});
 

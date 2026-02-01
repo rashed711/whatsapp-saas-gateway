@@ -22,7 +22,8 @@ const App = () => {
 
   useEffect(() => {
     // Fetch System Settings
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3050';
+    let apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3050';
+    if (apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0, -1);
     fetch(`${apiUrl}/api/settings`)
       .then(res => res.json())
       .then(data => {
