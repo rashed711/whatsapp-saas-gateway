@@ -62,6 +62,8 @@ class MongoStorage {
             filter = { username: item.username };
         } else if (collection === 'muted_chats' && item.sessionId && item.chatId) {
             filter = { sessionId: item.sessionId, chatId: item.chatId };
+        } else if (collection === 'settings' && item.key) {
+            filter = { key: item.key };
         } else {
             // New item without ID, just create
             const newItem = await Model.create(item);
