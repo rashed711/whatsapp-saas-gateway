@@ -56,6 +56,10 @@ const Settings = () => {
 
             setSuccess('تم تحديث اسم النظام بنجاح (يرجى تحديث الصفحة)');
             setInitialSystemName(systemName);
+            // Reload to reflect changes globally
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
         } catch (err: any) {
             setError(err.message);
         } finally {
