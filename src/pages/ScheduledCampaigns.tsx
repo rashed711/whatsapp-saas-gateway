@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, Plus, Pause, Play, Trash2, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Calendar, Clock, Plus, Pause, Play, Trash2, CheckCircle, AlertTriangle, RefreshCw, Edit2 } from 'lucide-react';
 
 const getApiUrl = () => {
     let url = import.meta.env.VITE_API_URL || 'http://localhost:3050';
@@ -11,6 +11,7 @@ const ScheduledCampaigns = () => {
     const [campaigns, setCampaigns] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [editId, setEditId] = useState<string | null>(null);
 
     // Create Form State
     const [formData, setFormData] = useState({
@@ -80,18 +81,67 @@ const ScheduledCampaigns = () => {
 
             const payload = {
                 ...formData,
-                recipients,
+                recipients: editId ? undefined : recipients, // Don't send recipients on edit unless we want to support it. Server blocks if paused.
+                // Actually server allows if pending. Let's send it only if user changed it? 
+                // For simplicity, let's send 'recipients' only if creating. 
+                // Wait, user might want to edit recipients of a pending campaign.
+                // Let's send recipients if editId is null OR we explicitly allow it.
+                // Frontend logic: form.recipientsText is filled. If we send it, server handles logic.
+                // Server blocks recipient update if PAUSED. So safe to send always?
+                // If I send it on PAUSE, server throws 400. That is fine, we catch it.
                 scheduledTime: new Date(formData.scheduledTime).toISOString()
             };
 
-            const res = await fetch(`${API_URL}/api/scheduled-campaigns`, {
-                method: 'POST',
+            // If we are editing, we might not want to re-parse recipients if text hasn't changed to avoid re-sending large array?
+            // But strict state management is better. Send what's in the box.
+
+            const method = editId ? 'PUT' : 'POST';
+            const url = editId ? `${API_URL}/api/scheduled-campaigns/${editId}` : `${API_URL}/api/scheduled-campaigns`;
+
+            const res = await fetch(url, {
+                method,
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(editId ? { ...payload, recipients: editId ? undefined : payload.recipients } : payload)
+                // Wait, if I want to edit recipients on Pending, I MUST send them.
+                // If I'm editing a Paused campaign, I MUST NOT send them (or server errors).
+                // Let's refine: If editId && status is 'paused', don't send recipients.
             });
+
+            // To do that, I need to know the status of the campaign being edited inside this function.
+            // Simplified approach: ALWAYS send payload. If server rejects because it's paused, user sees error "Cannot change recipients...".
+            // That's acceptable. But better: if I'm editing, allow user to NOT change recipients text?
+            // Let's stick to standard payload for now.
+
+            const finalPayload = { ...payload };
+            if (editId) {
+                // Find current status
+                const current = campaigns.find(c => c._id === editId);
+                if (current && current.status === 'paused') {
+                    delete (finalPayload as any).recipients; // Don't update recipients if paused
+                } else {
+                    finalPayload.recipients = recipients; // Ensure parsed recipients are included for pending
+                }
+            }
+
+            const response = await fetch(url, {
+                method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(finalPayload)
+            });
+
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.error || 'Failed to save campaign');
+            }
+
+            setShowCreateModal(false);
+            setEditId(null); // Clear edit mode
 
             if (!res.ok) {
                 const errData = await res.json();
@@ -114,6 +164,29 @@ const ScheduledCampaigns = () => {
         } catch (error: any) {
             alert(error.message);
         }
+    };
+
+    const handleEdit = (campaign: any) => {
+        setEditId(campaign._id);
+        const recipientsList = campaign.recipients.map((r: any) => r.number).join('\n');
+
+        // Format date for datetime-local input (YYYY-MM-DDThh:mm)
+        const date = new Date(campaign.scheduledTime);
+        // Adjust for timezone offset
+        const localIso = new Date(date.getTime() - (date.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
+
+        setFormData({
+            title: campaign.title,
+            sessionId: campaign.sessionId,
+            messageType: campaign.messageType,
+            content: campaign.content || '',
+            caption: campaign.caption || '',
+            recipientsText: recipientsList,
+            scheduledTime: localIso,
+            minDelay: campaign.minDelay,
+            maxDelay: campaign.maxDelay
+        });
+        setShowCreateModal(true);
     };
 
     const handleAction = async (id: string, action: 'pause' | 'resume' | 'delete') => {
@@ -214,6 +287,14 @@ const ScheduledCampaigns = () => {
                             </div>
 
                             <div className="flex items-center gap-2">
+                                {(camp.status === 'pending' || camp.status === 'paused') && (
+                                    <button
+                                        onClick={() => handleEdit(camp)}
+                                        className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg tooltip" title="تعديل"
+                                    >
+                                        <Edit2 size={20} />
+                                    </button>
+                                )}
                                 {camp.status === 'active' && (
                                     <button
                                         onClick={() => handleAction(camp._id, 'pause')}
@@ -249,8 +330,14 @@ const ScheduledCampaigns = () => {
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
                     <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
                         <div className="p-6 border-b border-slate-100 flex justify-between items-center sticky top-0 bg-white z-10">
-                            <h3 className="text-xl font-bold text-slate-800">جدولة حملة جديدة</h3>
-                            <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-red-500">
+                            <h3 className="text-xl font-bold text-slate-800">
+                                {editId ? 'تعديل الحملة' : 'جدولة حملة جديدة'}
+                            </h3>
+                            <button onClick={() => {
+                                setShowCreateModal(false); setEditId(null); setFormData({
+                                    title: '', sessionId: '', messageType: 'text', content: '', caption: '', recipientsText: '', scheduledTime: '', minDelay: 3, maxDelay: 10
+                                });
+                            }} className="text-slate-400 hover:text-red-500">
                                 <Trash2 size={24} className="rotate-45" /> {/* Using Trash as X implies cancel, wait, use X from lucide? No import, Trash2 rotate is hacky. Let's assume user accepts it or import X if possible. Actually I imported X not in this file. Wait, I see Plus, Pause, etc. I'll stick to a simple text X or existing icon. Ah, in prior steps I imported X in Sidebar. */}
                                 <span className="text-2xl font-bold">&times;</span>
                             </button>
@@ -393,7 +480,7 @@ const ScheduledCampaigns = () => {
                                     type="submit"
                                     className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white py-3 rounded-xl font-bold transition-all"
                                 >
-                                    حفظ وجدولة
+                                    {editId ? 'حفظ التغييرات' : 'حفظ وجدولة'}
                                 </button>
                                 <button
                                     type="button"

@@ -740,6 +740,68 @@ app.post('/api/scheduled-campaigns', authenticateToken, async (req: any, res) =>
     }
 });
 
+// Update Campaign Details
+app.put('/api/scheduled-campaigns/:id', authenticateToken, async (req: any, res) => {
+    try {
+        const { sessionId, title, messageType, content, caption, recipients, scheduledTime, minDelay, maxDelay } = req.body;
+
+        // Find existing to ensure ownership and status
+        const existing = await storage.getItem('scheduled_campaigns', { _id: req.params.id, userId: req.user.userId });
+        if (!existing) return res.status(404).json({ error: 'Campaign not found' });
+
+        if (existing.status === 'active' || existing.status === 'completed') {
+            return res.status(400).json({ error: 'Cannot edit an active or completed campaign. Pause it first.' });
+        }
+
+        // Validate Recipients Format if provided
+        let validRecipients = existing.recipients;
+        if (recipients && Array.isArray(recipients)) {
+            validRecipients = recipients.map((r: any) => ({
+                number: r.number,
+                status: 'pending',
+                error: null
+            }));
+        }
+
+        const updateData: any = {
+            _id: req.params.id,
+            userId: req.user.userId,
+            sessionId: sessionId || existing.sessionId,
+            title: title || existing.title,
+            messageType: messageType || existing.messageType,
+            content: content !== undefined ? content : existing.content,
+            caption: caption !== undefined ? caption : existing.caption,
+            recipients: validRecipients,
+            scheduledTime: scheduledTime ? new Date(scheduledTime) : existing.scheduledTime,
+            minDelay: minDelay ? Number(minDelay) : existing.minDelay,
+            maxDelay: maxDelay ? Number(maxDelay) : existing.maxDelay,
+            status: existing.status, // Keep existing status (pending/paused)
+            progress: existing.progress // Keep progress
+        };
+
+        // If recipients changed, reset progress stats? 
+        // Logic: If user edits recipients, they probably replaced the list. 
+        // If they just edit text, we keep progress? 
+        // For simplicity, if editing a 'pending' campaign, we can reset progress.
+        // If 'paused', modifying recipients is tricky if some already sent. 
+        // Let's assume full overwrite of recipients implies new list.
+        if (existing.status === 'pending' && recipients) {
+            updateData.progress = { sent: 0, failed: 0, total: validRecipients.length };
+        }
+        // If paused, we ideally shouldn't easily allow changing recipients to avoid messing up indices.
+        // Let's block recipient edit if paused for safety, or just warn.
+        if (existing.status === 'paused' && recipients) {
+            return res.status(400).json({ error: 'Cannot change recipients of a paused campaign. Only content can be edited.' });
+        }
+
+        await storage.saveItem('scheduled_campaigns', updateData);
+        res.json(updateData);
+    } catch (error: any) {
+        console.error('Update Campaign Error:', error);
+        res.status(500).json({ error: 'Failed to update campaign' });
+    }
+});
+
 // Action: Pause / Resume / Stop
 app.put('/api/scheduled-campaigns/:id/status', authenticateToken, async (req: any, res) => {
     try {
