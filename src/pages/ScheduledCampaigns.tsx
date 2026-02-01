@@ -93,7 +93,10 @@ const ScheduledCampaigns = () => {
                 body: JSON.stringify(payload)
             });
 
-            if (!res.ok) throw new Error('Failed to create campaign');
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.error || 'Failed to create campaign');
+            }
 
             setShowCreateModal(false);
             fetchCampaigns();
@@ -108,8 +111,8 @@ const ScheduledCampaigns = () => {
                 minDelay: 3,
                 maxDelay: 10
             });
-        } catch (error) {
-            alert('Failed to create campaign');
+        } catch (error: any) {
+            alert(error.message);
         }
     };
 
