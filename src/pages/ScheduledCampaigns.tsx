@@ -98,18 +98,6 @@ const ScheduledCampaigns = () => {
             const method = editId ? 'PUT' : 'POST';
             const url = editId ? `${API_URL}/api/scheduled-campaigns/${editId}` : `${API_URL}/api/scheduled-campaigns`;
 
-            const res = await fetch(url, {
-                method,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify(editId ? { ...payload, recipients: editId ? undefined : payload.recipients } : payload)
-                // Wait, if I want to edit recipients on Pending, I MUST send them.
-                // If I'm editing a Paused campaign, I MUST NOT send them (or server errors).
-                // Let's refine: If editId && status is 'paused', don't send recipients.
-            });
-
             // To do that, I need to know the status of the campaign being edited inside this function.
             // Simplified approach: ALWAYS send payload. If server rejects because it's paused, user sees error "Cannot change recipients...".
             // That's acceptable. But better: if I'm editing, allow user to NOT change recipients text?
@@ -143,10 +131,7 @@ const ScheduledCampaigns = () => {
             setShowCreateModal(false);
             setEditId(null); // Clear edit mode
 
-            if (!res.ok) {
-                const errData = await res.json();
-                throw new Error(errData.error || 'Failed to create campaign');
-            }
+
 
             setShowCreateModal(false);
             fetchCampaigns();
