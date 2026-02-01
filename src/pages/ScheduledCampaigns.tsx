@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, Plus, Pause, Play, Trash2, CheckCircle, AlertTriangle, RefreshCw, Edit2 } from 'lucide-react';
+import { Calendar, Clock, Plus, Pause, Play, Trash2, CheckCircle, AlertTriangle, RefreshCw, Edit2, FileText, X } from 'lucide-react';
 
 const getApiUrl = () => {
     let url = import.meta.env.VITE_API_URL || 'http://localhost:3050';
@@ -12,6 +12,7 @@ const ScheduledCampaigns = () => {
     const [loading, setLoading] = useState(true);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [editId, setEditId] = useState<string | null>(null);
+    const [viewCampaign, setViewCampaign] = useState<any | null>(null);
 
     // Create Form State
     const [formData, setFormData] = useState({
@@ -272,6 +273,12 @@ const ScheduledCampaigns = () => {
                             </div>
 
                             <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => setViewCampaign(camp)}
+                                    className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg tooltip" title="عرض التقرير"
+                                >
+                                    <FileText size={20} />
+                                </button>
                                 {(camp.status === 'pending' || camp.status === 'paused') && (
                                     <button
                                         onClick={() => handleEdit(camp)}
@@ -476,6 +483,90 @@ const ScheduledCampaigns = () => {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+            {/* Report Modal */}
+            {viewCampaign && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white rounded-t-2xl">
+                            <div>
+                                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                    <FileText size={24} className="text-emerald-500" />
+                                    تقرير الحملة: {viewCampaign.title}
+                                </h3>
+                                <p className="text-sm text-slate-500 mt-1">تاريخ الإنشاء: {new Date(viewCampaign.scheduledTime).toLocaleString('ar-EG')}</p>
+                            </div>
+                            <button onClick={() => setViewCampaign(null)} className="text-slate-400 hover:text-red-500">
+                                <X size={24} />
+                            </button>
+                        </div>
+
+                        <div className="p-6 overflow-y-auto flex-1">
+                            {/* Stats Cards */}
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                                <div className="bg-slate-50 p-4 rounded-xl text-center border border-slate-100">
+                                    <p className="text-slate-500 text-sm mb-1">إجمالي الأرقام</p>
+                                    <p className="text-2xl font-bold text-slate-800">{viewCampaign.recipients.length}</p>
+                                </div>
+                                <div className="bg-emerald-50 p-4 rounded-xl text-center border border-emerald-100">
+                                    <p className="text-emerald-600 text-sm mb-1">تم الإرسال</p>
+                                    <p className="text-2xl font-bold text-emerald-700">{viewCampaign.progress?.sent || 0}</p>
+                                </div>
+                                <div className="bg-red-50 p-4 rounded-xl text-center border border-red-100">
+                                    <p className="text-red-600 text-sm mb-1">فشل الإرسال</p>
+                                    <p className="text-2xl font-bold text-red-700">{viewCampaign.progress?.failed || 0}</p>
+                                </div>
+                                <div className="bg-yellow-50 p-4 rounded-xl text-center border border-yellow-100">
+                                    <p className="text-yellow-600 text-sm mb-1">قيد الانتظار</p>
+                                    <p className="text-2xl font-bold text-yellow-700">
+                                        {viewCampaign.recipients.length - ((viewCampaign.progress?.sent || 0) + (viewCampaign.progress?.failed || 0))}
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* Recipients Table */}
+                            <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
+                                <table className="w-full text-right">
+                                    <thead className="bg-slate-50 text-slate-600 text-sm font-bold">
+                                        <tr>
+                                            <th className="p-4">الرقم</th>
+                                            <th className="p-4">الحالة</th>
+                                            <th className="p-4">التفاصيل</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-50">
+                                        {viewCampaign.recipients.map((r: any, idx: number) => (
+                                            <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                                <td className="p-4 font-mono text-slate-600 dir-ltr text-right">{r.number}</td>
+                                                <td className="p-4">
+                                                    <span className={`px-2 py-1 rounded text-xs font-bold ${r.status === 'sent' ? 'bg-emerald-100 text-emerald-700' :
+                                                            r.status === 'failed' ? 'bg-red-100 text-red-700' :
+                                                                'bg-yellow-100 text-yellow-700'
+                                                        }`}>
+                                                        {r.status === 'sent' ? 'تم الإرسال' :
+                                                            r.status === 'failed' ? 'فشل' : 'قيد الانتظار'}
+                                                    </span>
+                                                </td>
+                                                <td className="p-4 text-sm text-red-500">
+                                                    {r.status === 'failed' ? (r.error || 'خطأ غير معروف') : '-'}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-2xl">
+                            <button
+                                onClick={() => setViewCampaign(null)}
+                                className="w-full bg-white border border-slate-200 text-slate-700 py-3 rounded-xl font-bold hover:bg-slate-50 transition-all"
+                            >
+                                إغلاق
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
