@@ -52,7 +52,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose, systemName
             `}>
                 <div className="p-6 border-b border-slate-800 flex justify-between items-center">
                     <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-                        <span className="text-emerald-500">WA</span> {systemName}
+                        {systemName}
                     </h1>
                     {/* Close Button Mobile */}
                     <button

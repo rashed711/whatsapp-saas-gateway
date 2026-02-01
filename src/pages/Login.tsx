@@ -65,7 +65,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, systemName }) => {
             <div className="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-700">
                 <div className="text-center mb-8">
                     <h1 className="text-3xl font-bold text-white mb-2 flex items-center justify-center gap-2">
-                        <span className="text-emerald-500">WA</span> {systemName}
+                        {systemName}
                     </h1>
                     <p className="text-slate-400">تسجيل الدخول إلى لوحة التحكم</p>
                 </div>

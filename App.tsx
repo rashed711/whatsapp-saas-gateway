@@ -105,8 +105,7 @@ const App = () => {
           {/* Mobile Header */}
           <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-30 shadow-md">
             <h1 className="text-xl font-bold flex items-center gap-2">
-
-              <span className="text-emerald-500">WA</span> {systemName}
+              {systemName}
             </h1>
             <button onClick={() => setIsSidebarOpen(true)}>
               <Menu size={24} />
