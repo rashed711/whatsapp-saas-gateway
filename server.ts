@@ -191,7 +191,6 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req: any,
             name,
             username,
             password: hashedPassword,
-            password: hashedPassword,
             role: 'user',
             permissions: permissions || [],
             isActive: true
