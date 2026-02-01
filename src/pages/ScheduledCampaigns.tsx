@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Calendar, Clock, Plus, Pause, Play, Trash2, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react';
 
 const getApiUrl = () => {
-    let url = import.meta.env.VITE_API_URL || '';
+    let url = import.meta.env.VITE_API_URL || 'http://localhost:3050';
     if (url.endsWith('/')) url = url.slice(0, -1);
     return url;
 };
