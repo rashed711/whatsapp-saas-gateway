@@ -23,8 +23,10 @@ const ScheduledCampaigns = () => {
         caption: '',
         recipientsText: '', // Raw input
         scheduledTime: '',
+        scheduledEndTime: '', // New Field for Window Mode
         minDelay: 3,
-        maxDelay: 10
+        maxDelay: 10,
+        schedulingMode: 'fixed' as 'fixed' | 'window' // New State
     });
 
     const [sessions, setSessions] = useState<any[]>([]);
@@ -80,6 +82,28 @@ const ScheduledCampaigns = () => {
             const numbers = formData.recipientsText.split(/[\n,]+/).map(n => n.trim()).filter(n => n.length >= 10);
             const recipients = numbers.map(n => ({ number: n }));
 
+            let { minDelay, maxDelay } = formData;
+
+            // Auto-calculate delays if in Window Mode
+            if (formData.schedulingMode === 'window' && formData.scheduledEndTime) {
+                const start = new Date(formData.scheduledTime).getTime();
+                const end = new Date(formData.scheduledEndTime).getTime();
+
+                if (end <= start) {
+                    throw new Error('وقت الانتهاء يجب أن يكون بعد وقت البدء');
+                }
+
+                const durationSeconds = (end - start) / 1000;
+                const count = recipients.length;
+
+                if (count > 0) {
+                    const avgDelay = durationSeconds / count;
+                    // Apply variance (+/- 30%)
+                    minDelay = Math.max(1, Math.floor(avgDelay * 0.7));
+                    maxDelay = Math.max(minDelay + 1, Math.ceil(avgDelay * 1.3));
+                }
+            }
+
             const payload = {
                 ...formData,
                 recipients: editId ? undefined : recipients, // Don't send recipients on edit unless we want to support it. Server blocks if paused.
@@ -90,7 +114,9 @@ const ScheduledCampaigns = () => {
                 // Frontend logic: form.recipientsText is filled. If we send it, server handles logic.
                 // Server blocks recipient update if PAUSED. So safe to send always?
                 // If I send it on PAUSE, server throws 400. That is fine, we catch it.
-                scheduledTime: new Date(formData.scheduledTime).toISOString()
+                scheduledTime: new Date(formData.scheduledTime).toISOString(),
+                minDelay,
+                maxDelay
             };
 
             // If we are editing, we might not want to re-parse recipients if text hasn't changed to avoid re-sending large array?
@@ -144,8 +170,10 @@ const ScheduledCampaigns = () => {
                 caption: '',
                 recipientsText: '',
                 scheduledTime: '',
+                scheduledEndTime: '',
                 minDelay: 3,
-                maxDelay: 10
+                maxDelay: 10,
+                schedulingMode: 'fixed'
             });
         } catch (error: any) {
             alert(error.message);
@@ -169,8 +197,10 @@ const ScheduledCampaigns = () => {
             caption: campaign.caption || '',
             recipientsText: recipientsList,
             scheduledTime: localIso,
+            scheduledEndTime: '', // On edit, we default to fixed mode as we don't store endTime
             minDelay: campaign.minDelay,
-            maxDelay: campaign.maxDelay
+            maxDelay: campaign.maxDelay,
+            schedulingMode: 'fixed'
         });
         setShowCreateModal(true);
     };
@@ -327,7 +357,7 @@ const ScheduledCampaigns = () => {
                             </h3>
                             <button onClick={() => {
                                 setShowCreateModal(false); setEditId(null); setFormData({
-                                    title: '', sessionId: '', messageType: 'text', content: '', caption: '', recipientsText: '', scheduledTime: '', minDelay: 3, maxDelay: 10
+                                    title: '', sessionId: '', messageType: 'text', content: '', caption: '', recipientsText: '', scheduledTime: '', scheduledEndTime: '', minDelay: 3, maxDelay: 10, schedulingMode: 'fixed'
                                 });
                             }} className="text-slate-400 hover:text-red-500">
                                 <Trash2 size={24} className="rotate-45" /> {/* Using Trash as X implies cancel, wait, use X from lucide? No import, Trash2 rotate is hacky. Let's assume user accepts it or import X if possible. Actually I imported X not in this file. Wait, I see Plus, Pause, etc. I'll stick to a simple text X or existing icon. Ah, in prior steps I imported X in Sidebar. */}
@@ -376,27 +406,69 @@ const ScheduledCampaigns = () => {
                                 <p className="text-xs text-slate-400 mt-1">سيتم بدء الحملة تلقائياً في هذا التوقيت</p>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">أقل فاصل (ثواني)</label>
-                                    <input
-                                        type="number"
-                                        min="1"
-                                        className="w-full border p-2 rounded-lg"
-                                        value={formData.minDelay}
-                                        onChange={e => setFormData({ ...formData, minDelay: parseInt(e.target.value) })}
-                                    />
+                            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                <label className="block text-sm font-medium text-slate-700 mb-2">طريقة الجدولة (الفواصل الزمنية)</label>
+                                <div className="flex gap-4 mb-3">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="schedMode"
+                                            checked={formData.schedulingMode === 'fixed'}
+                                            onChange={() => setFormData({ ...formData, schedulingMode: 'fixed' })}
+                                            className="accent-emerald-500"
+                                        />
+                                        <span>فاصل ثابت (يدوي)</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="schedMode"
+                                            checked={formData.schedulingMode === 'window'}
+                                            onChange={() => setFormData({ ...formData, schedulingMode: 'window' })}
+                                            className="accent-emerald-500"
+                                        />
+                                        <span>توزيع خلال فترة زمنية (تلقائي)</span>
+                                    </label>
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">أقصى فاصل (ثواني)</label>
-                                    <input
-                                        type="number"
-                                        min="1"
-                                        className="w-full border p-2 rounded-lg"
-                                        value={formData.maxDelay}
-                                        onChange={e => setFormData({ ...formData, maxDelay: parseInt(e.target.value) })}
-                                    />
-                                </div>
+
+                                {formData.schedulingMode === 'fixed' ? (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-medium text-slate-600 mb-1">أقل فاصل (ثواني)</label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                className="w-full border p-2 rounded-lg bg-white"
+                                                value={formData.minDelay}
+                                                onChange={e => setFormData({ ...formData, minDelay: parseInt(e.target.value) })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-slate-600 mb-1">أقصى فاصل (ثواني)</label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                className="w-full border p-2 rounded-lg bg-white"
+                                                value={formData.maxDelay}
+                                                onChange={e => setFormData({ ...formData, maxDelay: parseInt(e.target.value) })}
+                                            />
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">الانتهاء في (وقت النهاية)</label>
+                                        <input
+                                            type="datetime-local"
+                                            required={formData.schedulingMode === 'window'}
+                                            className="w-full border p-2 rounded-lg bg-white ltr"
+                                            value={formData.scheduledEndTime}
+                                            onChange={e => setFormData({ ...formData, scheduledEndTime: e.target.value })}
+                                        />
+                                        <p className="text-xs text-blue-500 mt-2">
+                                            سيقوم النظام بحساب الفواصل الزمنية تلقائياً لتوزيع {formData.recipientsText.split('\n').filter(n => n.trim()).length} رسالة بالتساوي من وقت البدء وحتى وقت النهاية.
+                                        </p>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="border-t border-slate-100 pt-4">
@@ -542,8 +614,8 @@ const ScheduledCampaigns = () => {
                                                 <td className="p-4 font-mono text-slate-600 dir-ltr text-right">{r.number}</td>
                                                 <td className="p-4">
                                                     <span className={`px-2 py-1 rounded text-xs font-bold ${r.status === 'sent' ? 'bg-emerald-100 text-emerald-700' :
-                                                            r.status === 'failed' ? 'bg-red-100 text-red-700' :
-                                                                'bg-yellow-100 text-yellow-700'
+                                                        r.status === 'failed' ? 'bg-red-100 text-red-700' :
+                                                            'bg-yellow-100 text-yellow-700'
                                                         }`}>
                                                         {r.status === 'sent' ? 'تم الإرسال' :
                                                             r.status === 'failed' ? 'فشل' : 'قيد الانتظار'}
