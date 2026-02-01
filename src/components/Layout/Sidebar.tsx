@@ -21,9 +21,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout, isOpen, onClose, systemName
 
     const links = allLinks.filter(link => {
         if (isAdmin) return true;
-        // If user has no permissions array (legacy), show all by default OR show none? 
-        // Plan said: "Existing standard users will default to having access to all current tabs"
-        if (!user.permissions || user.permissions.length === 0) return true;
+        // Strict Permission Check:
+        // If user has 'permissions' array defined (even if empty), we respect it.
+        // We only allow "fall-through" if permissions is UNDEFINED (true legacy).
+        if (user.permissions === undefined || user.permissions === null) return true;
+
         return user.permissions.includes(link.permission);
     });
 
