@@ -579,14 +579,19 @@ export class WhatsAppEngine {
 
   async cleanupData() {
     try {
-      const authPath = this.getAuthPath();
-      // try removing directory recursively
-      await fs.rm(authPath, { recursive: true, force: true });
-      console.log(`[Engine] Auth data for ${this.sessionId} cleared.`);
+      // 1. Clear MongoDB Auth State (SaaS Core)
+      await storage.deleteItem('auth_states', { sessionId: this.sessionId });
 
-      // Optional: Clear contacts? No, user might want to keep data.
+      // 2. Update Session Status in DB to prevent automatic resumption
+      await storage.saveItem('sessions', { id: this.sessionId, status: 'DISCONNECTED' });
+
+      // 3. Optional: Clear local files (Legacy/Fallback)
+      const authPath = this.getAuthPath();
+      await fs.rm(authPath, { recursive: true, force: true });
+
+      console.log(`[Engine] Auth data and status for ${this.sessionId} cleared in DB & Disk.`);
     } catch (e) {
-      console.error('[Engine] Failed to clear data', e);
+      console.error('[Engine] Failed to clear data:', e);
     }
   }
 
