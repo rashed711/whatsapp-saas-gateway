@@ -298,11 +298,23 @@ export class WhatsAppEngine {
                             // 0. Check if Chat is Muted (Human Takeover)
                             const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
                             if (isMuted) {
-                                console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Muted Mode.`);
+                                console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Muted Mode (Human Takeover).`);
                             }
                             else {
-                                // Extract text content (support conversation or extendedTextMessage)
-                                const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                                // --- Robust Text Extraction ---
+                                let textContent = '';
+                                const m = msg.message;
+                                // 1. Unwrap Ephemeral/ViewOnce
+                                const messageContent = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m;
+                                if (messageContent) {
+                                    textContent =
+                                        messageContent.conversation ||
+                                            messageContent.extendedTextMessage?.text ||
+                                            messageContent.imageMessage?.caption ||
+                                            messageContent.videoMessage?.caption ||
+                                            messageContent.documentMessage?.caption ||
+                                            '';
+                                }
                                 if (textContent) {
                                     console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
                                     const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
