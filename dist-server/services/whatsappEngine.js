@@ -31,7 +31,7 @@ export class WhatsAppEngine {
     /**
      * Initialize Session
      */
-    async startSession(onQR, onConnected) {
+    async startSession(onQR, onConnected, onError) {
         if (this.sock || this.status === 'CONNECTED') {
             console.log(`[Engine] Session ${this.sessionId} is already active/connecting. Ignoring start request.`);
             if (this.status === 'CONNECTED')
@@ -48,12 +48,13 @@ export class WhatsAppEngine {
                 auth: state,
                 printQRInTerminal: false,
                 logger: P({ level: 'silent' }), // Reduce logs for production
-                browser: ['WhatsApp Gateway', 'Chrome', '1.0.0'],
+                browser: ['Ubuntu', 'Chrome', '20.0.04'], // More compatible browser string
                 defaultQueryTimeoutMs: 60000,
-                connectTimeoutMs: 10000,
+                connectTimeoutMs: 20000, // Increased timeout
                 syncFullHistory: false, // Optimize memory: don't sync full history
                 msgRetryCounterCache: undefined, // Save memory
-                getMessage: async () => undefined // Optimization: don't store messages in memory
+                getMessage: async () => undefined, // Optimization: don't store messages in memory
+                markOnlineOnConnect: false // Don't mark as online automatically
             });
             // Handle Connection Updates
             this.sock.ev.on('connection.update', async (update) => {
@@ -129,6 +130,8 @@ export class WhatsAppEngine {
                         console.log(`[Engine] Session ${this.sessionId} stopped. Reason: ${reason || 'Logged out'}`);
                         this.status = 'ERROR';
                         await this.cleanupData();
+                        if (onError)
+                            onError(reason || 'loggedOut');
                     }
                 }
             });
@@ -530,14 +533,17 @@ export class WhatsAppEngine {
     }
     async cleanupData() {
         try {
+            // 1. Clear MongoDB Auth State (SaaS Core)
+            await storage.deleteItem('auth_states', { sessionId: this.sessionId });
+            // 2. Update Session Status in DB to prevent automatic resumption
+            await storage.saveItem('sessions', { id: this.sessionId, status: 'DISCONNECTED' });
+            // 3. Optional: Clear local files (Legacy/Fallback)
             const authPath = this.getAuthPath();
-            // try removing directory recursively
             await fs.rm(authPath, { recursive: true, force: true });
-            console.log(`[Engine] Auth data for ${this.sessionId} cleared.`);
-            // Optional: Clear contacts? No, user might want to keep data.
+            console.log(`[Engine] Auth data and status for ${this.sessionId} cleared in DB & Disk.`);
         }
         catch (e) {
-            console.error('[Engine] Failed to clear data', e);
+            console.error('[Engine] Failed to clear data:', e);
         }
     }
     async validateNumber(phone) {

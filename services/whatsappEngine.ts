@@ -39,7 +39,7 @@ export class WhatsAppEngine {
   /**
    * Initialize Session
    */
-  async startSession(onQR: (qr: string) => void, onConnected: () => void) {
+  async startSession(onQR: (qr: string) => void, onConnected: () => void, onError?: (reason: any) => void) {
     if (this.sock || this.status === 'CONNECTED') {
       console.log(`[Engine] Session ${this.sessionId} is already active/connecting. Ignoring start request.`);
       if (this.status === 'CONNECTED') onConnected();
@@ -58,12 +58,13 @@ export class WhatsAppEngine {
         auth: state,
         printQRInTerminal: false,
         logger: P({ level: 'silent' }), // Reduce logs for production
-        browser: ['WhatsApp Gateway', 'Chrome', '1.0.0'],
+        browser: ['Ubuntu', 'Chrome', '20.0.04'], // More compatible browser string
         defaultQueryTimeoutMs: 60000,
-        connectTimeoutMs: 10000,
+        connectTimeoutMs: 20000, // Increased timeout
         syncFullHistory: false, // Optimize memory: don't sync full history
         msgRetryCounterCache: undefined, // Save memory
-        getMessage: async () => undefined // Optimization: don't store messages in memory
+        getMessage: async () => undefined, // Optimization: don't store messages in memory
+        markOnlineOnConnect: false // Don't mark as online automatically
       });
 
       // Handle Connection Updates
@@ -152,6 +153,7 @@ export class WhatsAppEngine {
             console.log(`[Engine] Session ${this.sessionId} stopped. Reason: ${reason || 'Logged out'}`);
             this.status = 'ERROR';
             await this.cleanupData();
+            if (onError) onError(reason || 'loggedOut');
           }
         }
       });
