@@ -172,11 +172,12 @@ export class WhatsAppEngine {
             });
             // 2. Fallback: Parse Incoming Messages to extract sender number/name
             this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                console.log(`[Engine] messages.upsert event: ${messages.length} messages, Type: ${type}`);
                 if (type === 'notify' || type === 'append') {
-                    console.log(`[Engine] Rx ${messages.length} msgs. Type: ${type}`);
                     const contactsToUpdate = [];
                     for (const msg of messages) {
-                        // console.log(`[Engine] Processing Msg: ...`);
+                        let remoteJid = msg.key.remoteJid;
+                        console.log(`[Engine] Incoming msg from ${remoteJid}, fromMe: ${msg.key.fromMe}`);
                         if (msg.key.fromMe) {
                             // Ignore bot's own messages (Auto-Replies) to prevent triggering Human Takeover
                             if (msg.key.id && this.sentMessageIds.has(msg.key.id)) {
@@ -215,7 +216,7 @@ export class WhatsAppEngine {
                             }
                             continue;
                         }
-                        const remoteJid = msg.key.remoteJid;
+                        remoteJid = msg.key.remoteJid;
                         // Allow @s.whatsapp.net AND @lid (Lightning IDs)
                         if (!remoteJid || remoteJid.includes('@broadcast') || (!remoteJid.includes('@s.whatsapp.net') && !remoteJid.includes('@lid')))
                             continue;
