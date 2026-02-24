@@ -50,7 +50,10 @@ export class WhatsAppEngine {
                 logger: P({ level: 'silent' }), // Reduce logs for production
                 browser: ['WhatsApp Gateway', 'Chrome', '1.0.0'],
                 defaultQueryTimeoutMs: 60000,
-                connectTimeoutMs: 10000, // Explicit connection timeout
+                connectTimeoutMs: 10000,
+                syncFullHistory: false, // Optimize memory: don't sync full history
+                msgRetryCounterCache: undefined, // Save memory
+                getMessage: async () => undefined // Optimization: don't store messages in memory
             });
             // Handle Connection Updates
             this.sock.ev.on('connection.update', async (update) => {
@@ -113,7 +116,9 @@ export class WhatsAppEngine {
                         clearTimeout(this.connectionStabilityTimeout);
                     const reason = lastDisconnect?.error?.output?.statusCode;
                     console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
-                    const shouldReconnect = reason !== DisconnectReason.loggedOut;
+                    // Reason 405: Unauthorized/Invalid Session. Reason 401: Logged Out.
+                    const isInvalidSession = reason === 405 || reason === 401 || reason === DisconnectReason.loggedOut;
+                    const shouldReconnect = !isInvalidSession;
                     if (shouldReconnect) {
                         const delay = Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Exponential backoff max 30s
                         console.log(`[Engine] Reconnecting in ${delay}ms... (Attempt ${this.retryCount + 1})`);
@@ -121,7 +126,7 @@ export class WhatsAppEngine {
                         setTimeout(() => this.startSession(onQR, onConnected), delay);
                     }
                     else {
-                        console.log('[Engine] Session logged out. Stopping.');
+                        console.log(`[Engine] Session ${this.sessionId} stopped. Reason: ${reason || 'Logged out'}`);
                         this.status = 'ERROR';
                         await this.cleanupData();
                     }
@@ -199,11 +204,30 @@ export class WhatsAppEngine {
                         if (!remoteJid || remoteJid.includes('@broadcast') || (!remoteJid.includes('@s.whatsapp.net') && !remoteJid.includes('@lid')))
                             continue;
                         const pushName = msg.pushName;
-                        // --- Webhook Trigger (n8n) ---
+                        // --- Webhook Trigger (n8n & Multiple) ---
                         try {
                             const session = await storage.getItem('sessions', { id: this.sessionId });
-                            if (session && session.webhookUrl) {
-                                console.log(`[Webhook] Reforwarding message from ${remoteJid} to ${session.webhookUrl}`);
+                            // Collect all unique URLs
+                            const targets = new Set();
+                            // 1. Legacy Single
+                            if (session?.webhookUrl)
+                                targets.add(session.webhookUrl);
+                            // 2. Legacy Array
+                            if (session?.webhookUrls && Array.isArray(session.webhookUrls)) {
+                                session.webhookUrls.forEach((url) => {
+                                    if (url && typeof url === 'string')
+                                        targets.add(url);
+                                });
+                            }
+                            // 3. New Named Webhooks
+                            if (session?.webhooks && Array.isArray(session.webhooks)) {
+                                session.webhooks.forEach((w) => {
+                                    if (w.url && typeof w.url === 'string')
+                                        targets.add(w.url);
+                                });
+                            }
+                            if (targets.size > 0) {
+                                console.log(`[Webhook] Reforwarding message from ${remoteJid} to ${targets.size} endpoints.`);
                                 // Determine message type and content
                                 let msgType = 'text';
                                 let msgContent = '';
@@ -239,12 +263,14 @@ export class WhatsAppEngine {
                                     timestamp: msg.messageTimestamp,
                                     full_message: msg
                                 };
-                                // Fire and Forget (Don't await to avoid blocking auto-reply)
-                                fetch(session.webhookUrl, {
+                                // Dispatch to all targets (Fire and Forget)
+                                const promises = Array.from(targets).map(url => fetch(url, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify(payload)
-                                }).catch(err => console.error(`[Webhook] Failed to send to ${session.webhookUrl}:`, err.message));
+                                }).catch(err => console.error(`[Webhook] Failed to send to ${url}:`, err.message)));
+                                // We don't await all to avoid blocking, but maybe we should await Promise.allSettled slightly?
+                                // The original code didn't await. Let's keep it async.
                             }
                         }
                         catch (whErr) {

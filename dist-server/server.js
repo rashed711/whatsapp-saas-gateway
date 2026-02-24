@@ -8,7 +8,9 @@ import { Server } from 'socket.io';
 import { storage } from './services/storage.js';
 import { CampaignService } from './services/campaignService.js';
 import { SessionService } from './services/sessionService.js';
+// import { Action } from './models/Action.js'; removed bad import
 import { AutoReplyService } from './services/autoReplyService.js';
+import { SchedulerService } from './services/schedulerService.js';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -102,6 +104,7 @@ const PORT = Number(process.env.PORT || 3050);
 const startServer = async () => {
     await storage.init(); // Ensure data dir exists
     await SessionService.loadSessions();
+    SchedulerService.init();
     await seedAdmin();
     httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`Backend Server running on port ${PORT}`);
@@ -116,13 +119,51 @@ app.get('/api/version', (req, res) => {
         env: process.env.NODE_ENV
     });
 });
+// --- Settings Routes ---
+// Get System Settings (Public to allow Login page to show name)
+app.get('/api/settings', async (req, res) => {
+    try {
+        const settings = await storage.getItems('settings');
+        // Convert array to object { key: value }
+        const settingsObj = settings.reduce((acc, curr) => {
+            // Since settings are sorted by createdAt desc (Newest first),
+            // we only take the first occurrence of each key to ignore old duplicates.
+            if (acc[curr.key] === undefined) {
+                acc[curr.key] = curr.value;
+            }
+            return acc;
+        }, {});
+        // Default if not set
+        if (!settingsObj.systemName)
+            settingsObj.systemName = 'Gateway WA';
+        res.json(settingsObj);
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+// Update Settings (Admin Only)
+app.put('/api/settings', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { systemName } = req.body;
+        console.log('Updating settings:', req.body);
+        if (systemName) {
+            await storage.saveItem('settings', { key: 'systemName', value: systemName });
+        }
+        res.json({ success: true, message: 'Settings updated' });
+    }
+    catch (error) {
+        console.error('Settings update error:', error);
+        res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
 // --- Auth Routes ---
 // Register (Now Protected - Admin Only)
 app.post('/api/auth/register', authenticateToken, requireAdmin, async (req, res) => {
     console.log('--> REGISTER REQUEST RECEIVED');
     console.log('Body:', JSON.stringify(req.body, null, 2));
     try {
-        const { name, username, password } = req.body;
+        const { name, username, password, permissions } = req.body;
         if (!name || !username || !password)
             return res.status(400).json({ error: 'Missing fields' });
         const existingUser = await storage.getItem('users', { username });
@@ -134,6 +175,7 @@ app.post('/api/auth/register', authenticateToken, requireAdmin, async (req, res)
             username,
             password: hashedPassword,
             role: 'user',
+            permissions: permissions || [],
             isActive: true
         });
         console.log('--> USER CREATED SUCCESSFULLY:', user._id);
@@ -168,7 +210,7 @@ app.post('/api/auth/login', async (req, res) => {
         if (!validPassword)
             return res.status(400).json({ error: 'Invalid password' });
         const token = jwt.sign({ userId: user._id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ token, user: { id: user._id, name: user.name, username: user.username, role: user.role } });
+        res.json({ token, user: { id: user._id, name: user.name, username: user.username, role: user.role, permissions: user.permissions || [] } });
     }
     catch (error) {
         console.error('Login error', error);
@@ -207,7 +249,7 @@ app.get('/api/users', authenticateToken, requireAdmin, async (req, res) => {
 app.put('/api/users/:id', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, username, password, isActive } = req.body;
+        const { name, username, password, isActive, permissions } = req.body;
         // Prevent suspending Admin
         const targetUser = await storage.getItem('users', { _id: id });
         if (!targetUser)
@@ -216,6 +258,8 @@ app.put('/api/users/:id', authenticateToken, requireAdmin, async (req, res) => {
             return res.status(403).json({ error: 'Cannot suspend an admin account' });
         }
         const updateData = { _id: id, name, username, isActive };
+        if (permissions)
+            updateData.permissions = permissions;
         if (password && password.trim() !== '') {
             updateData.password = await bcrypt.hash(password, 10);
         }
@@ -273,7 +317,9 @@ app.get('/api/sessions', authenticateToken, async (req, res) => {
         id: s.id,
         name: s.name,
         status: s.engine.currentStatus,
-        webhookUrl: s.webhookUrl // Include Webhook URL
+        webhookUrl: s.webhookUrl, // Include Webhook URL
+        webhookUrls: s.webhookUrls || [], // Legacy
+        webhooks: s.webhooks || [] // New: Named Webhooks
     }));
     res.json(userSessions);
 });
@@ -464,22 +510,44 @@ app.post('/api/sessions/:sessionId/messages', authenticateToken, async (req, res
 // Configure Webhook URL
 app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req, res) => {
     const { sessionId } = req.params;
-    const { webhookUrl } = req.body;
+    const { webhookUrl, webhookUrls, webhooks } = req.body;
+    console.log(`[Webhook Update] Session: ${sessionId}`);
+    console.log(`[Webhook Update] Payload:`, JSON.stringify(req.body, null, 2));
     // Isolation Check
     const session = await storage.getItem('sessions', { id: sessionId });
     if (!session || session.userId !== req.user.userId) {
         return res.status(404).json({ error: 'Session not found or access denied' });
     }
     try {
+        // Validate Webhooks Structure
+        let textWebhooks = [];
+        if (webhooks && Array.isArray(webhooks)) {
+            textWebhooks = webhooks.filter((w) => w.url && w.url.trim() !== '');
+            // Ensure name is present
+            textWebhooks = textWebhooks.map(w => ({
+                name: w.name || 'Webhook',
+                url: w.url
+            }));
+        }
+        console.log(`[Webhook Update] Processed Webhooks:`, textWebhooks);
         // Merge with existing session data to avoid validation errors or data loss
-        const updatedSession = { ...session, webhookUrl: webhookUrl || '' };
+        const updatedSession = {
+            ...session,
+            webhookUrl: webhookUrl || '',
+            webhookUrls: Array.isArray(webhookUrls) ? webhookUrls : (session.webhookUrls || []),
+            webhooks: textWebhooks
+        };
         // Clean up fields that shouldn't be updated manually or cause Mongoose errors
         if (updatedSession._id)
             delete updatedSession._id;
         delete updatedSession.createdAt;
         delete updatedSession.updatedAt;
+        console.log(`[Webhook Update] Saving to Storage...`);
         await storage.saveItem('sessions', updatedSession);
-        res.json({ success: true, message: 'Webhook URL updated', webhookUrl });
+        console.log(`[Webhook Update] Save Complete.`);
+        // Sync in-memory cache
+        SessionService.updateSessionWebhooks(sessionId, updatedSession.webhooks);
+        res.json({ success: true, message: 'Webhook URL updated', webhookUrl, webhookUrls: updatedSession.webhookUrls, webhooks: updatedSession.webhooks });
     }
     catch (error) {
         console.error('Webhook save error:', error);
@@ -544,6 +612,140 @@ app.delete('/api/autoreply/:id', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to delete rule' });
     }
 });
+// --- Scheduled Campaigns Routes ---
+// List Campaigns
+app.get('/api/scheduled-campaigns', authenticateToken, async (req, res) => {
+    try {
+        // Admins see all? Or just own? Let's stick to own for now unless admin wants to oversee
+        // For simplicity: User sees their own.
+        const campaigns = await storage.getItems('scheduled_campaigns', { userId: req.user.userId });
+        res.json(campaigns);
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to fetch campaigns' });
+    }
+});
+// Create Campaign
+app.post('/api/scheduled-campaigns', authenticateToken, async (req, res) => {
+    try {
+        const { sessionId, title, messageType, content, caption, recipients, scheduledTime, minDelay, maxDelay } = req.body;
+        if (!title || !recipients || recipients.length === 0 || !scheduledTime) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        // Validate Recipients Format
+        const validRecipients = recipients.map((r) => ({
+            number: r.number,
+            status: 'pending',
+            error: null
+        }));
+        const newCampaign = await storage.saveItem('scheduled_campaigns', {
+            userId: req.user.userId,
+            sessionId,
+            title,
+            messageType: messageType || 'text',
+            content,
+            caption,
+            recipients: validRecipients,
+            scheduledTime: new Date(scheduledTime),
+            minDelay: Number(minDelay) || 3,
+            maxDelay: Number(maxDelay) || 10,
+            status: 'pending',
+            progress: { sent: 0, failed: 0, total: validRecipients.length }
+        });
+        res.json(newCampaign);
+    }
+    catch (error) {
+        console.error('Create Campaign Error:', error);
+        res.status(500).json({ error: 'Failed to create campaign' });
+    }
+});
+// Update Campaign Details
+app.put('/api/scheduled-campaigns/:id', authenticateToken, async (req, res) => {
+    try {
+        const { sessionId, title, messageType, content, caption, recipients, scheduledTime, minDelay, maxDelay } = req.body;
+        // Find existing to ensure ownership and status
+        const existing = await storage.getItem('scheduled_campaigns', { _id: req.params.id, userId: req.user.userId });
+        if (!existing)
+            return res.status(404).json({ error: 'Campaign not found' });
+        if (existing.status === 'active' || existing.status === 'completed') {
+            return res.status(400).json({ error: 'Cannot edit an active or completed campaign. Pause it first.' });
+        }
+        // Validate Recipients Format if provided
+        let validRecipients = existing.recipients;
+        if (recipients && Array.isArray(recipients)) {
+            validRecipients = recipients.map((r) => ({
+                number: r.number,
+                status: 'pending',
+                error: null
+            }));
+        }
+        const updateData = {
+            _id: req.params.id,
+            userId: req.user.userId,
+            sessionId: sessionId || existing.sessionId,
+            title: title || existing.title,
+            messageType: messageType || existing.messageType,
+            content: content !== undefined ? content : existing.content,
+            caption: caption !== undefined ? caption : existing.caption,
+            recipients: validRecipients,
+            scheduledTime: scheduledTime ? new Date(scheduledTime) : existing.scheduledTime,
+            minDelay: minDelay ? Number(minDelay) : existing.minDelay,
+            maxDelay: maxDelay ? Number(maxDelay) : existing.maxDelay,
+            status: existing.status, // Keep existing status (pending/paused)
+            progress: existing.progress // Keep progress
+        };
+        // If recipients changed, reset progress stats? 
+        // Logic: If user edits recipients, they probably replaced the list. 
+        // If they just edit text, we keep progress? 
+        // For simplicity, if editing a 'pending' campaign, we can reset progress.
+        // If 'paused', modifying recipients is tricky if some already sent. 
+        // Let's assume full overwrite of recipients implies new list.
+        if (existing.status === 'pending' && recipients) {
+            updateData.progress = { sent: 0, failed: 0, total: validRecipients.length };
+        }
+        // If paused, we ideally shouldn't easily allow changing recipients to avoid messing up indices.
+        // Let's block recipient edit if paused for safety, or just warn.
+        if (existing.status === 'paused' && recipients) {
+            return res.status(400).json({ error: 'Cannot change recipients of a paused campaign. Only content can be edited.' });
+        }
+        await storage.saveItem('scheduled_campaigns', updateData);
+        res.json(updateData);
+    }
+    catch (error) {
+        console.error('Update Campaign Error:', error);
+        res.status(500).json({ error: 'Failed to update campaign' });
+    }
+});
+// Action: Pause / Resume / Stop
+app.put('/api/scheduled-campaigns/:id/status', authenticateToken, async (req, res) => {
+    try {
+        const { status } = req.body;
+        if (!['paused', 'active', 'stopped'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid status' });
+        }
+        const campaign = await storage.getItem('scheduled_campaigns', { _id: req.params.id, userId: req.user.userId });
+        if (!campaign)
+            return res.status(404).json({ error: 'Campaign not found' });
+        // If resuming, ensure time is passed or just set to active so scheduler picks it up immediately?
+        // Scheduler checks { scheduledTime: { $lte: now } }. If old, it runs immediately.
+        await storage.saveItem('scheduled_campaigns', { _id: req.params.id, status });
+        // If resuming immediately, we might want to trigger scheduler, but interval will catch it in 30s.
+        res.json({ success: true, status });
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to update status' });
+    }
+});
+// Delete Campaign
+app.delete('/api/scheduled-campaigns/:id', authenticateToken, async (req, res) => {
+    try {
+        await storage.deleteItem('scheduled_campaigns', { _id: req.params.id, userId: req.user.userId });
+        res.json({ success: true });
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to delete campaign' });
+    }
+});
 // --- Socket.IO with Auth ---
 io.use((socket, next) => {
     const token = socket.handshake.auth.token;
@@ -568,7 +770,10 @@ io.on('connection', (socket) => {
             .map(s => ({
             id: s.id,
             name: s.name,
-            status: s.engine.currentStatus
+            status: s.engine.currentStatus,
+            webhookUrl: s.webhookUrl,
+            webhookUrls: s.webhookUrls || [],
+            webhooks: s.webhooks || []
         }));
         socket.emit('sessions-list', userSessions);
     });
@@ -621,10 +826,6 @@ io.on('connection', (socket) => {
         await SessionService.logoutSession(sessionId, userId, socket, io);
     });
 });
-// ---------------------------------------------------------
-// KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
-// ---------------------------------------------------------
-// ---------------------------------------------------------
 // ---------------------------------------------------------
 // KEEP-ALIVE MECHANISM (Prevent Render Free Tier Sleep)
 // ---------------------------------------------------------

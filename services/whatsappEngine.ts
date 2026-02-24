@@ -60,7 +60,10 @@ export class WhatsAppEngine {
         logger: P({ level: 'silent' }), // Reduce logs for production
         browser: ['WhatsApp Gateway', 'Chrome', '1.0.0'],
         defaultQueryTimeoutMs: 60000,
-        connectTimeoutMs: 10000, // Explicit connection timeout
+        connectTimeoutMs: 10000,
+        syncFullHistory: false, // Optimize memory: don't sync full history
+        msgRetryCounterCache: undefined, // Save memory
+        getMessage: async () => undefined // Optimization: don't store messages in memory
       });
 
       // Handle Connection Updates
@@ -135,7 +138,9 @@ export class WhatsAppEngine {
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
           console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
 
-          const shouldReconnect = reason !== DisconnectReason.loggedOut;
+          // Reason 405: Unauthorized/Invalid Session. Reason 401: Logged Out.
+          const isInvalidSession = reason === 405 || reason === 401 || reason === DisconnectReason.loggedOut;
+          const shouldReconnect = !isInvalidSession;
 
           if (shouldReconnect) {
             const delay = Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Exponential backoff max 30s
@@ -144,7 +149,7 @@ export class WhatsAppEngine {
             this.retryCount++;
             setTimeout(() => this.startSession(onQR, onConnected), delay);
           } else {
-            console.log('[Engine] Session logged out. Stopping.');
+            console.log(`[Engine] Session ${this.sessionId} stopped. Reason: ${reason || 'Logged out'}`);
             this.status = 'ERROR';
             await this.cleanupData();
           }
