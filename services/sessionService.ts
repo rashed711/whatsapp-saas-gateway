@@ -134,7 +134,7 @@ export class SessionService {
                 },
                 (reason) => {
                     console.error(`Session ${sessionId} connection error:`, reason);
-                    socket.emit('session-status', { sessionId, status: 'error' });
+                    socket.emit('session-status', { sessionId, status: 'ERROR' });
                     this.updateSessionStatusInStorage(sessionId, 'DISCONNECTED');
                     io.to(`user:${userId}`).emit('sessions-updated');
                 }

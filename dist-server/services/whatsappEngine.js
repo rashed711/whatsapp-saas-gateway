@@ -2,7 +2,7 @@
  * WhatsApp Engine (SaaS Core)
  * This engine is designed to work in a Node.js environment with Baileys and File Storage.
  */
-import { makeWASocket, DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion, Browsers } from '@whiskeysockets/baileys';
 import P from 'pino';
 import fs from 'fs/promises';
 import path from 'path';
@@ -41,20 +41,33 @@ export class WhatsAppEngine {
         this.status = 'QR';
         console.log(`[Engine] Starting Baileys socket for session ${this.sessionId} (Mongo Auth)...`);
         try {
+            // Fetch latest version with a hardcoded fallback to avoid 405 errors
+            let version = [2, 3000, 1017531287];
+            try {
+                const latest = await fetchLatestBaileysVersion();
+                version = latest.version;
+                console.log(`[Engine] Using fetched version ${version.join('.')} for ${this.sessionId}`);
+            }
+            catch (e) {
+                console.warn(`[Engine] Failed to fetch latest version, using fallback ${version.join('.')}`);
+            }
             // Use MongoDB Auth Adapter
             const { state, saveCreds } = await useMongoDBAuthState(this.sessionId);
             // Create Socket
             this.sock = makeWASocket({
                 auth: state,
+                version,
                 printQRInTerminal: false,
-                logger: P({ level: 'silent' }), // Reduce logs for production
-                browser: ['Ubuntu', 'Chrome', '20.0.04'], // More compatible browser string
+                mobile: false,
+                logger: P({ level: 'silent' }),
+                browser: Browsers.macOS('Chrome'),
                 defaultQueryTimeoutMs: 60000,
-                connectTimeoutMs: 20000, // Increased timeout
-                syncFullHistory: false, // Optimize memory: don't sync full history
-                msgRetryCounterCache: undefined, // Save memory
-                getMessage: async () => undefined, // Optimization: don't store messages in memory
-                markOnlineOnConnect: false // Don't mark as online automatically
+                connectTimeoutMs: 60000,
+                keepAliveIntervalMs: 30000,
+                syncFullHistory: false,
+                msgRetryCounterCache: undefined,
+                getMessage: async () => undefined,
+                markOnlineOnConnect: false
             });
             // Handle Connection Updates
             this.sock.ev.on('connection.update', async (update) => {
