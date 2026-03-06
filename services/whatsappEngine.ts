@@ -77,7 +77,7 @@ export class WhatsAppEngine {
         version,
         printQRInTerminal: false,
         mobile: false,
-        logger: P({ level: 'silent' }),
+        logger: P({ level: 'error' }),
         browser: Browsers.macOS('Chrome'),
         defaultQueryTimeoutMs: 60000,
         connectTimeoutMs: 60000,
@@ -309,13 +309,17 @@ export class WhatsAppEngine {
 
             // --- Signal Repair Logic ---
             // Detect and fix decryption errors on the fly
-            if (msg.messageStubType === 'CIPHERTEXT' || (!msg.message && !msg.key.fromMe)) {
-              console.warn(`[Engine] Potential decryption error from ${remoteJid}. Attempting Signal Repair...`);
+            // messageStubType 1 is CIPHERTEXT
+            const isCiphertext = msg.messageStubType === 'CIPHERTEXT' || msg.messageStubType === 1 ||
+              (!msg.message && !msg.key.fromMe && !msg.messageStubType);
+
+            if (isCiphertext) {
+              console.warn(`[Engine] Decryption failure from ${remoteJid}. Attempting Signal Repair...`);
               try {
-                // Force clear session for this JID to trigger a fresh pre-key exchange
+                // Force clear session for this JID
                 if (this.sock?.signalRepository?.clearSession) {
                   await this.sock.signalRepository.clearSession(remoteJid);
-                  console.log(`[Engine] Cleared Signal session for ${remoteJid}. Next message should be readable.`);
+                  console.log(`[Engine] Cleared Signal session for ${remoteJid}.`);
                 }
               } catch (repairErr) {
                 console.error('[Engine] Signal Repair failed:', repairErr);
