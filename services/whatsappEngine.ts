@@ -157,6 +157,12 @@ export class WhatsAppEngine {
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
           console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
 
+          // Detect Signal "Over 2000 messages into the future" error
+          const errorMessage = lastDisconnect?.error?.message || '';
+          if (errorMessage.includes('Over 2000 messages into the future')) {
+            console.error(`[Engine] FATAL SIGNAL ERROR for ${this.sessionId}: ${errorMessage}`);
+          }
+
           // Reason 440: Connection Replaced (Conflict)
           // Reason 405: Unauthorized/Invalid Session. Reason 401: Logged Out.
           const isConflict = reason === 440;
@@ -166,18 +172,29 @@ export class WhatsAppEngine {
 
           if (isConflict) {
             console.warn(`[Engine] CONFLICT detected for ${this.sessionId}. Checking ownership...`);
-            // Check if another session for the same number has become active recently
-            const userJid = lastDisconnect?.error?.data?.me?.id || this.sock?.user?.id;
-            const phoneNumber = userJid ? userJid.split(':')[0] : null;
 
-            if (phoneNumber) {
-              const currentSession = await storage.getItem('sessions', { id: this.sessionId });
-              if (currentSession?.status === 'TERMINATED' || currentSession?.status === 'DISCONNECTED') {
-                console.log(`[Engine] Session ${this.sessionId} yield to newer session. Stopping.`);
-                shouldReconnect = false;
+            // Give the DB a moment to update status from other instances
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            const currentSession = await storage.getItem('sessions', { id: this.sessionId });
+            if (!currentSession || currentSession.status === 'TERMINATED' || currentSession.status === 'DISCONNECTED') {
+              console.log(`[Engine] Session ${this.sessionId} yield to newer session. Stopping.`);
+              shouldReconnect = false;
+            } else {
+              // Deeper check: is there any other CONNECTED session for this number?
+              const phoneNumber = currentSession.phoneNumber;
+              if (phoneNumber) {
+                const allSessions = await storage.getItems('sessions', { phoneNumber });
+                const newerActive = allSessions.find(s => s.id !== this.sessionId && s.status === 'CONNECTED');
+                if (newerActive) {
+                  console.log(`[Engine] Newer active session found (${newerActive.id}). Yielding ${this.sessionId}.`);
+                  shouldReconnect = false;
+                  // Avoid marking as TERMINATED so it can be resumed manually, but stop the loop
+                }
               }
             }
           }
+
 
           if (shouldReconnect) {
             const delay = isConflict ? 10000 : Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Wait longer on conflict
