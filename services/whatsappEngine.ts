@@ -79,6 +79,7 @@ export class WhatsAppEngine {
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
         syncFullHistory: false,
+        shouldSyncHistoryMessage: () => false, // Disable history sync to prevent Signal key desync
         msgRetryCounterCache,
         getMessage: async () => undefined,
         markOnlineOnConnect: false
@@ -156,12 +157,30 @@ export class WhatsAppEngine {
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
           console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
 
+          // Reason 440: Connection Replaced (Conflict)
           // Reason 405: Unauthorized/Invalid Session. Reason 401: Logged Out.
+          const isConflict = reason === 440;
           const isInvalidSession = reason === 405 || reason === 401 || reason === DisconnectReason.loggedOut;
-          const shouldReconnect = !isInvalidSession;
+
+          let shouldReconnect = !isInvalidSession;
+
+          if (isConflict) {
+            console.warn(`[Engine] CONFLICT detected for ${this.sessionId}. Checking ownership...`);
+            // Check if another session for the same number has become active recently
+            const userJid = lastDisconnect?.error?.data?.me?.id || this.sock?.user?.id;
+            const phoneNumber = userJid ? userJid.split(':')[0] : null;
+
+            if (phoneNumber) {
+              const currentSession = await storage.getItem('sessions', { id: this.sessionId });
+              if (currentSession?.status === 'TERMINATED' || currentSession?.status === 'DISCONNECTED') {
+                console.log(`[Engine] Session ${this.sessionId} yield to newer session. Stopping.`);
+                shouldReconnect = false;
+              }
+            }
+          }
 
           if (shouldReconnect) {
-            const delay = Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Exponential backoff max 30s
+            const delay = isConflict ? 10000 : Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Wait longer on conflict
             console.log(`[Engine] Reconnecting in ${delay}ms... (Attempt ${this.retryCount + 1})`);
 
             this.retryCount++;
