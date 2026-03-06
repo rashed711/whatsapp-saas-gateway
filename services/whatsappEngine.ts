@@ -10,6 +10,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import NodeCache from 'node-cache';
+import { v4 as uuidv4 } from 'uuid';
 import { storage } from './storage.js';
 import { AutoReplyService } from './autoReplyService.js';
 import { useMongoDBAuthState } from './mongoAuth.js';
@@ -24,6 +25,7 @@ const msgRetryCounterCache = new NodeCache();
 export class WhatsAppEngine {
   private userId: string;
   private sessionId: string;
+  private instanceId: string;
   private status: 'IDLE' | 'QR' | 'CONNECTED' | 'ERROR' = 'IDLE';
   private sock: any = null;
   private retryCount = 0;
@@ -34,6 +36,7 @@ export class WhatsAppEngine {
   constructor(userId: string, sessionId: string) {
     this.userId = userId;
     this.sessionId = sessionId;
+    this.instanceId = uuidv4();
   }
 
   // Auth path is no longer needed but we keep folder logic just in case or remove if safe
@@ -108,9 +111,10 @@ export class WhatsAppEngine {
           if (phoneNumber) {
             console.log(`[Engine] Verifying uniqueness for number: ${phoneNumber}`);
 
-            // 1. Update this session with the phone number
+            // 1. Update this session with the phone number and Instance ID
             await storage.saveItem('sessions', {
               id: this.sessionId,
+              instanceId: this.instanceId,
               userId: this.userId, // Ensure userId is preserved
               phoneNumber: phoneNumber,
               status: 'CONNECTED',
@@ -191,8 +195,12 @@ export class WhatsAppEngine {
               await new Promise(resolve => setTimeout(resolve, 3000));
 
               const currentSession = await storage.getItem('sessions', { id: this.sessionId });
-              if (!currentSession || currentSession.status === 'TERMINATED' || currentSession.status === 'DISCONNECTED') {
-                console.log(`[Engine] Session ${this.sessionId} yield to newer session. Stopping.`);
+
+              // DEFINITIVE Ownership Check
+              const isOwner = currentSession?.instanceId === this.instanceId;
+
+              if (!isOwner || !currentSession || currentSession.status === 'TERMINATED' || currentSession.status === 'DISCONNECTED') {
+                console.log(`[Engine] Session ${this.sessionId} yield to newer instance (${currentSession?.instanceId}). Stopping.`);
                 shouldReconnect = false;
               } else {
                 const phoneNumber = currentSession.phoneNumber;
@@ -298,6 +306,22 @@ export class WhatsAppEngine {
             }
 
             remoteJid = msg.key.remoteJid;
+
+            // --- Signal Repair Logic ---
+            // Detect and fix decryption errors on the fly
+            if (msg.messageStubType === 'CIPHERTEXT' || (!msg.message && !msg.key.fromMe)) {
+              console.warn(`[Engine] Potential decryption error from ${remoteJid}. Attempting Signal Repair...`);
+              try {
+                // Force clear session for this JID to trigger a fresh pre-key exchange
+                if (this.sock?.signalRepository?.clearSession) {
+                  await this.sock.signalRepository.clearSession(remoteJid);
+                  console.log(`[Engine] Cleared Signal session for ${remoteJid}. Next message should be readable.`);
+                }
+              } catch (repairErr) {
+                console.error('[Engine] Signal Repair failed:', repairErr);
+              }
+            }
+
             // Allow @s.whatsapp.net AND @lid (Lightning IDs)
             if (!remoteJid || remoteJid.includes('@broadcast') || (!remoteJid.includes('@s.whatsapp.net') && !remoteJid.includes('@lid'))) continue;
 
