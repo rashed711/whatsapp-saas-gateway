@@ -100,12 +100,20 @@ export class AutoReplyService {
     static async getResponse(userId: string, messageContent: string, sessionId?: string): Promise<IAutoReply | null> {
         if (!messageContent) return null;
 
+        console.log(`[AutoReplyService] Finding match for: "${messageContent}" (User: ${userId}, Session: ${sessionId})`);
+
         const allRules: IAutoReply[] = await storage.getItems('autoreplies', { userId });
         const activeRules = allRules.filter(r => r.isActive);
+
+        console.log(`[AutoReplyService] Total rules: ${allRules.length}, Active: ${activeRules.length}`);
+
         const contentLower = messageContent.toLowerCase().trim();
 
         for (const rule of activeRules) {
-            if (rule.sessionId && rule.sessionId !== sessionId) continue;
+            if (rule.sessionId && rule.sessionId !== sessionId) {
+                console.log(`[AutoReplyService] Skipping rule ${rule._id} (Session mismatch)`);
+                continue;
+            }
 
             // Support multiple keywords split by comma
             const keywords = rule.keyword.split(',').map(k => k.trim()).filter(k => k.length > 0);

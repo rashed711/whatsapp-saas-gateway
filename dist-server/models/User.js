@@ -4,6 +4,7 @@ const UserSchema = new Schema({
     username: { type: String, required: true, unique: true },
     password: { type: String },
     role: { type: String, enum: ['admin', 'user'], default: 'user' },
+    permissions: { type: [String], default: [] },
     isActive: { type: Boolean, default: true }
 }, {
     timestamps: true

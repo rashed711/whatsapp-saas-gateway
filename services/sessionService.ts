@@ -24,8 +24,8 @@ export class SessionService {
             const storedSessions: ISession[] = await storage.getItems('sessions');
             console.log(`Found ${storedSessions.length} total sessions in storage.`);
 
-            const loadPromises = storedSessions.map(async (s) => {
-                if (!s.userId) return;
+            for (const s of storedSessions) {
+                if (!s.userId) continue;
 
                 const engine = new WhatsAppEngine(s.userId, s.id);
                 this.sessions.set(s.id, {
@@ -45,14 +45,13 @@ export class SessionService {
                             (qr) => console.log(`[Startup] QR generated for ${s.id}`),
                             () => console.log(`[Startup] Session ${s.id} resumed!`)
                         );
+                        // Add a delay to prevent CPU/RAM spikes during simultaneous startups
+                        await new Promise(resolve => setTimeout(resolve, 2000));
                     } catch (err: any) {
                         console.error(`[Startup] Failed to resume ${s.id}`, err.message);
-                        // Optionally update status to error or disconnected if resume fails hard
                     }
                 }
-            });
-
-            await Promise.all(loadPromises);
+            }
             console.log(`Loaded ${this.sessions.size} active sessions in memory.`);
             return true;
         } catch (error) {
@@ -131,6 +130,12 @@ export class SessionService {
                     socket.emit('session-status', { sessionId, status: 'connected' });
 
                     this.updateSessionStatusInStorage(sessionId, 'CONNECTED');
+                    io.to(`user:${userId}`).emit('sessions-updated');
+                },
+                (reason) => {
+                    console.error(`Session ${sessionId} connection error:`, reason);
+                    socket.emit('session-status', { sessionId, status: 'ERROR' });
+                    this.updateSessionStatusInStorage(sessionId, 'DISCONNECTED');
                     io.to(`user:${userId}`).emit('sessions-updated');
                 }
             );

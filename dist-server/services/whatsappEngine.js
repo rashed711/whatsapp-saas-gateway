@@ -2,7 +2,7 @@
  * WhatsApp Engine (SaaS Core)
  * This engine is designed to work in a Node.js environment with Baileys and File Storage.
  */
-import { makeWASocket, DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion, Browsers } from '@whiskeysockets/baileys';
 import P from 'pino';
 import fs from 'fs/promises';
 import path from 'path';
@@ -31,7 +31,7 @@ export class WhatsAppEngine {
     /**
      * Initialize Session
      */
-    async startSession(onQR, onConnected) {
+    async startSession(onQR, onConnected, onError) {
         if (this.sock || this.status === 'CONNECTED') {
             console.log(`[Engine] Session ${this.sessionId} is already active/connecting. Ignoring start request.`);
             if (this.status === 'CONNECTED')
@@ -41,16 +41,33 @@ export class WhatsAppEngine {
         this.status = 'QR';
         console.log(`[Engine] Starting Baileys socket for session ${this.sessionId} (Mongo Auth)...`);
         try {
+            // Fetch latest version with a hardcoded fallback to avoid 405 errors
+            let version = [2, 3000, 1017531287];
+            try {
+                const latest = await fetchLatestBaileysVersion();
+                version = latest.version;
+                console.log(`[Engine] Using fetched version ${version.join('.')} for ${this.sessionId}`);
+            }
+            catch (e) {
+                console.warn(`[Engine] Failed to fetch latest version, using fallback ${version.join('.')}`);
+            }
             // Use MongoDB Auth Adapter
             const { state, saveCreds } = await useMongoDBAuthState(this.sessionId);
             // Create Socket
             this.sock = makeWASocket({
                 auth: state,
+                version,
                 printQRInTerminal: false,
-                logger: P({ level: 'silent' }), // Reduce logs for production
-                browser: ['WhatsApp Gateway', 'Chrome', '1.0.0'],
+                mobile: false,
+                logger: P({ level: 'silent' }),
+                browser: Browsers.macOS('Chrome'),
                 defaultQueryTimeoutMs: 60000,
-                connectTimeoutMs: 10000, // Explicit connection timeout
+                connectTimeoutMs: 60000,
+                keepAliveIntervalMs: 30000,
+                syncFullHistory: false,
+                msgRetryCounterCache: undefined,
+                getMessage: async () => undefined,
+                markOnlineOnConnect: false
             });
             // Handle Connection Updates
             this.sock.ev.on('connection.update', async (update) => {
@@ -113,7 +130,9 @@ export class WhatsAppEngine {
                         clearTimeout(this.connectionStabilityTimeout);
                     const reason = lastDisconnect?.error?.output?.statusCode;
                     console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
-                    const shouldReconnect = reason !== DisconnectReason.loggedOut;
+                    // Reason 405: Unauthorized/Invalid Session. Reason 401: Logged Out.
+                    const isInvalidSession = reason === 405 || reason === 401 || reason === DisconnectReason.loggedOut;
+                    const shouldReconnect = !isInvalidSession;
                     if (shouldReconnect) {
                         const delay = Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Exponential backoff max 30s
                         console.log(`[Engine] Reconnecting in ${delay}ms... (Attempt ${this.retryCount + 1})`);
@@ -121,9 +140,11 @@ export class WhatsAppEngine {
                         setTimeout(() => this.startSession(onQR, onConnected), delay);
                     }
                     else {
-                        console.log('[Engine] Session logged out. Stopping.');
+                        console.log(`[Engine] Session ${this.sessionId} stopped. Reason: ${reason || 'Logged out'}`);
                         this.status = 'ERROR';
                         await this.cleanupData();
+                        if (onError)
+                            onError(reason || 'loggedOut');
                     }
                 }
             });
@@ -151,11 +172,12 @@ export class WhatsAppEngine {
             });
             // 2. Fallback: Parse Incoming Messages to extract sender number/name
             this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                console.log(`[Engine] messages.upsert event: ${messages.length} messages, Type: ${type}`);
                 if (type === 'notify' || type === 'append') {
-                    console.log(`[Engine] Rx ${messages.length} msgs. Type: ${type}`);
                     const contactsToUpdate = [];
                     for (const msg of messages) {
-                        // console.log(`[Engine] Processing Msg: ...`);
+                        let remoteJid = msg.key.remoteJid;
+                        console.log(`[Engine] Incoming msg from ${remoteJid}, fromMe: ${msg.key.fromMe}`);
                         if (msg.key.fromMe) {
                             // Ignore bot's own messages (Auto-Replies) to prevent triggering Human Takeover
                             if (msg.key.id && this.sentMessageIds.has(msg.key.id)) {
@@ -194,16 +216,35 @@ export class WhatsAppEngine {
                             }
                             continue;
                         }
-                        const remoteJid = msg.key.remoteJid;
+                        remoteJid = msg.key.remoteJid;
                         // Allow @s.whatsapp.net AND @lid (Lightning IDs)
                         if (!remoteJid || remoteJid.includes('@broadcast') || (!remoteJid.includes('@s.whatsapp.net') && !remoteJid.includes('@lid')))
                             continue;
                         const pushName = msg.pushName;
-                        // --- Webhook Trigger (n8n) ---
+                        // --- Webhook Trigger (n8n & Multiple) ---
                         try {
                             const session = await storage.getItem('sessions', { id: this.sessionId });
-                            if (session && session.webhookUrl) {
-                                console.log(`[Webhook] Reforwarding message from ${remoteJid} to ${session.webhookUrl}`);
+                            // Collect all unique URLs
+                            const targets = new Set();
+                            // 1. Legacy Single
+                            if (session?.webhookUrl)
+                                targets.add(session.webhookUrl);
+                            // 2. Legacy Array
+                            if (session?.webhookUrls && Array.isArray(session.webhookUrls)) {
+                                session.webhookUrls.forEach((url) => {
+                                    if (url && typeof url === 'string')
+                                        targets.add(url);
+                                });
+                            }
+                            // 3. New Named Webhooks
+                            if (session?.webhooks && Array.isArray(session.webhooks)) {
+                                session.webhooks.forEach((w) => {
+                                    if (w.url && typeof w.url === 'string')
+                                        targets.add(w.url);
+                                });
+                            }
+                            if (targets.size > 0) {
+                                console.log(`[Webhook] Reforwarding message from ${remoteJid} to ${targets.size} endpoints.`);
                                 // Determine message type and content
                                 let msgType = 'text';
                                 let msgContent = '';
@@ -239,12 +280,14 @@ export class WhatsAppEngine {
                                     timestamp: msg.messageTimestamp,
                                     full_message: msg
                                 };
-                                // Fire and Forget (Don't await to avoid blocking auto-reply)
-                                fetch(session.webhookUrl, {
+                                // Dispatch to all targets (Fire and Forget)
+                                const promises = Array.from(targets).map(url => fetch(url, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify(payload)
-                                }).catch(err => console.error(`[Webhook] Failed to send to ${session.webhookUrl}:`, err.message));
+                                }).catch(err => console.error(`[Webhook] Failed to send to ${url}:`, err.message)));
+                                // We don't await all to avoid blocking, but maybe we should await Promise.allSettled slightly?
+                                // The original code didn't await. Let's keep it async.
                             }
                         }
                         catch (whErr) {
@@ -256,11 +299,23 @@ export class WhatsAppEngine {
                             // 0. Check if Chat is Muted (Human Takeover)
                             const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
                             if (isMuted) {
-                                console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Muted Mode.`);
+                                console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Muted Mode (Human Takeover).`);
                             }
                             else {
-                                // Extract text content (support conversation or extendedTextMessage)
-                                const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                                // --- Robust Text Extraction ---
+                                let textContent = '';
+                                const m = msg.message;
+                                // 1. Unwrap Ephemeral/ViewOnce
+                                const messageContent = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m;
+                                if (messageContent) {
+                                    textContent =
+                                        messageContent.conversation ||
+                                            messageContent.extendedTextMessage?.text ||
+                                            messageContent.imageMessage?.caption ||
+                                            messageContent.videoMessage?.caption ||
+                                            messageContent.documentMessage?.caption ||
+                                            '';
+                                }
                                 if (textContent) {
                                     console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
                                     const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
@@ -504,14 +559,17 @@ export class WhatsAppEngine {
     }
     async cleanupData() {
         try {
+            // 1. Clear MongoDB Auth State (SaaS Core)
+            await storage.deleteItem('auth_states', { sessionId: this.sessionId });
+            // 2. Update Session Status in DB to prevent automatic resumption
+            await storage.saveItem('sessions', { id: this.sessionId, status: 'DISCONNECTED' });
+            // 3. Optional: Clear local files (Legacy/Fallback)
             const authPath = this.getAuthPath();
-            // try removing directory recursively
             await fs.rm(authPath, { recursive: true, force: true });
-            console.log(`[Engine] Auth data for ${this.sessionId} cleared.`);
-            // Optional: Clear contacts? No, user might want to keep data.
+            console.log(`[Engine] Auth data and status for ${this.sessionId} cleared in DB & Disk.`);
         }
         catch (e) {
-            console.error('[Engine] Failed to clear data', e);
+            console.error('[Engine] Failed to clear data:', e);
         }
     }
     async validateNumber(phone) {

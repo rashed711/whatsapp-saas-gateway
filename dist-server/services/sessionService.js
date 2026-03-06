@@ -10,29 +10,31 @@ export class SessionService {
             console.log('Loading sessions from storage...');
             const storedSessions = await storage.getItems('sessions');
             console.log(`Found ${storedSessions.length} total sessions in storage.`);
-            const loadPromises = storedSessions.map(async (s) => {
+            for (const s of storedSessions) {
                 if (!s.userId)
-                    return;
+                    continue;
                 const engine = new WhatsAppEngine(s.userId, s.id);
                 this.sessions.set(s.id, {
                     id: s.id,
                     name: s.name,
                     userId: s.userId,
                     webhookUrl: s.webhookUrl,
+                    webhookUrls: s.webhookUrls || [],
+                    webhooks: s.webhooks || [],
                     engine
                 });
                 if (s.status === 'CONNECTED') {
                     console.log(`[Startup] Attempting to resume session ${s.id} for user ${s.userId}...`);
                     try {
                         await engine.startSession((qr) => console.log(`[Startup] QR generated for ${s.id}`), () => console.log(`[Startup] Session ${s.id} resumed!`));
+                        // Add a delay to prevent CPU/RAM spikes during simultaneous startups
+                        await new Promise(resolve => setTimeout(resolve, 2000));
                     }
                     catch (err) {
                         console.error(`[Startup] Failed to resume ${s.id}`, err.message);
-                        // Optionally update status to error or disconnected if resume fails hard
                     }
                 }
-            });
-            await Promise.all(loadPromises);
+            }
             console.log(`Loaded ${this.sessions.size} active sessions in memory.`);
             return true;
         }
@@ -54,7 +56,9 @@ export class SessionService {
         const sessionId = 'sess_' + Date.now();
         const engine = new WhatsAppEngine(userId, sessionId);
         const webhookUrl = ''; // Default empty
-        this.sessions.set(sessionId, { id: sessionId, name, userId, engine, webhookUrl });
+        const webhookUrls = []; // Default empty
+        const webhooks = []; // Default empty
+        this.sessions.set(sessionId, { id: sessionId, name, userId, engine, webhookUrl, webhookUrls, webhooks });
         try {
             await storage.saveItem('sessions', { id: sessionId, name, userId, status: 'IDLE', webhookUrl });
         }
@@ -97,6 +101,11 @@ export class SessionService {
                 socket.emit('session-status', { sessionId, status: 'connected' });
                 this.updateSessionStatusInStorage(sessionId, 'CONNECTED');
                 io.to(`user:${userId}`).emit('sessions-updated');
+            }, (reason) => {
+                console.error(`Session ${sessionId} connection error:`, reason);
+                socket.emit('session-status', { sessionId, status: 'ERROR' });
+                this.updateSessionStatusInStorage(sessionId, 'DISCONNECTED');
+                io.to(`user:${userId}`).emit('sessions-updated');
             });
         }
         catch (error) {
@@ -120,5 +129,15 @@ export class SessionService {
                 storage.saveItem('sessions', s);
             }
         });
+    }
+    static updateSessionWebhooks(sessionId, webhooks) {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+            session.webhooks = webhooks;
+            // Also clear legacy fields to avoid confusion
+            session.webhookUrl = '';
+            session.webhookUrls = [];
+            this.sessions.set(sessionId, session);
+        }
     }
 }
