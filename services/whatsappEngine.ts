@@ -160,7 +160,11 @@ export class WhatsAppEngine {
           // Detect Signal "Over 2000 messages into the future" error
           const errorMessage = lastDisconnect?.error?.message || '';
           if (errorMessage.includes('Over 2000 messages into the future')) {
-            console.error(`[Engine] FATAL SIGNAL ERROR for ${this.sessionId}: ${errorMessage}`);
+            console.error(`[Engine] FATAL SIGNAL ERROR for ${this.sessionId}: ${errorMessage}. Forcing session reset.`);
+            this.status = 'ERROR';
+            await this.cleanupData();
+            if (onError) onError('fatal_signal_error');
+            return; // Stop the loop
           }
 
           // Reason 440: Connection Replaced (Conflict)
@@ -197,7 +201,7 @@ export class WhatsAppEngine {
 
 
           if (shouldReconnect) {
-            const delay = isConflict ? 10000 : Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Wait longer on conflict
+            const delay = isConflict ? 15000 : Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Wait longer on conflict
             console.log(`[Engine] Reconnecting in ${delay}ms... (Attempt ${this.retryCount + 1})`);
 
             this.retryCount++;
