@@ -314,8 +314,12 @@ export class WhatsAppEngine {
               if (isMuted) {
                 console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Muted Mode.`);
               } else {
-                // Extract text content (support conversation or extendedTextMessage)
-                const textContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                // Extract text content (support conversation, extendedTextMessage, and media captions)
+                const textContent = msg.message?.conversation ||
+                  msg.message?.extendedTextMessage?.text ||
+                  msg.message?.imageMessage?.caption ||
+                  msg.message?.videoMessage?.caption ||
+                  msg.message?.documentMessage?.caption;
 
                 if (textContent) {
                   console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
@@ -503,9 +507,10 @@ export class WhatsAppEngine {
     console.log(`[API] Sending ${type} to ${to}...`);
 
     try {
+      let sentMsg;
       if (type === 'text') {
         // Plain text message
-        await this.sock.sendMessage(jid, { text: content });
+        sentMsg = await this.sock.sendMessage(jid, { text: content });
       } else {
         // Media message handling
         const isUrl = content.startsWith('http://') || content.startsWith('https://');
@@ -515,16 +520,16 @@ export class WhatsAppEngine {
           console.log(`[API] Detected Media URL for ${type}`);
 
           if (type === 'image') {
-            await this.sock.sendMessage(jid, { image: { url: content }, caption: caption });
+            sentMsg = await this.sock.sendMessage(jid, { image: { url: content }, caption: caption });
           } else if (type === 'audio') {
-            await this.sock.sendMessage(jid, { audio: { url: content }, ptt: true }); // Send as Voice Note
+            sentMsg = await this.sock.sendMessage(jid, { audio: { url: content }, ptt: true }); // Send as Voice Note
           } else if (type === 'video') {
-            await this.sock.sendMessage(jid, { video: { url: content }, caption: caption });
+            sentMsg = await this.sock.sendMessage(jid, { video: { url: content }, caption: caption });
           } else if (type === 'document') {
             // Try to guess mimetype or default to pdf (WhatsApp requires mimetype for documents usually)
             // Ideally we'd fetch HEAD to check content-type, but for now we default to pdf/octet-stream
             // n8n users should ensure their URL is direct.
-            await this.sock.sendMessage(jid, {
+            sentMsg = await this.sock.sendMessage(jid, {
               document: { url: content },
               mimetype: 'application/pdf',
               fileName: caption || content.split('/').pop() || 'file.pdf'
@@ -539,16 +544,22 @@ export class WhatsAppEngine {
           const buffer = Buffer.from(base64Part, 'base64');
 
           if (type === 'image') {
-            await this.sock.sendMessage(jid, { image: buffer, caption: caption });
+            sentMsg = await this.sock.sendMessage(jid, { image: buffer, caption: caption });
           } else if (type === 'audio') {
-            await this.sock.sendMessage(jid, { audio: buffer, ptt: true });
+            sentMsg = await this.sock.sendMessage(jid, { audio: buffer, ptt: true });
           } else if (type === 'video') {
-            await this.sock.sendMessage(jid, { video: buffer, caption: caption });
+            sentMsg = await this.sock.sendMessage(jid, { video: buffer, caption: caption });
           } else if (type === 'document') {
-            await this.sock.sendMessage(jid, { document: buffer, mimetype: 'application/pdf', fileName: caption || 'file.pdf' });
+            sentMsg = await this.sock.sendMessage(jid, { document: buffer, mimetype: 'application/pdf', fileName: caption || 'file.pdf' });
           }
         }
       }
+
+      if (sentMsg?.key?.id) {
+        this.sentMessageIds.add(sentMsg.key.id);
+        setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000); // Clear after 15s
+      }
+
       return { success: true, timestamp: Date.now() };
     } catch (error) {
       console.error(`[API] Send failed:`, error);
