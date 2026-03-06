@@ -9,6 +9,7 @@ import P from 'pino';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import NodeCache from 'node-cache';
 import { storage } from './storage.js';
 import { AutoReplyService } from './autoReplyService.js';
 import { useMongoDBAuthState } from './mongoAuth.js';
@@ -16,6 +17,9 @@ import { useMongoDBAuthState } from './mongoAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Cache to handle "Over 2000 messages into the future" decryption errors
+const msgRetryCounterCache = new NodeCache();
 
 export class WhatsAppEngine {
   private userId: string;
@@ -75,7 +79,7 @@ export class WhatsAppEngine {
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
         syncFullHistory: false,
-        msgRetryCounterCache: undefined,
+        msgRetryCounterCache,
         getMessage: async () => undefined,
         markOnlineOnConnect: false
       });
