@@ -27,6 +27,7 @@ export class WhatsAppEngine {
   private status: 'IDLE' | 'QR' | 'CONNECTED' | 'ERROR' = 'IDLE';
   private sock: any = null;
   private retryCount = 0;
+  private conflictCount = 0;
   private connectionStabilityTimeout: NodeJS.Timeout | null = null;
   private sentMessageIds = new Set<string>();
 
@@ -157,10 +158,14 @@ export class WhatsAppEngine {
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
           console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
 
-          // Detect Signal "Over 2000 messages into the future" error
+          // Detect Signal "Over 2000 messages into the future" error or session desync
           const errorMessage = lastDisconnect?.error?.message || '';
-          if (errorMessage.includes('Over 2000 messages into the future')) {
-            console.error(`[Engine] FATAL SIGNAL ERROR for ${this.sessionId}: ${errorMessage}. Forcing session reset.`);
+          const isFatalSignal = errorMessage.includes('Over 2000 messages into the future') ||
+            errorMessage.includes('SessionError') ||
+            (lastDisconnect?.error as any)?.name === 'SessionError';
+
+          if (isFatalSignal) {
+            console.error(`[Engine] FATAL DECRYPTION ERROR for ${this.sessionId}: ${errorMessage}. Forcing session reset.`);
             this.status = 'ERROR';
             await this.cleanupData();
             if (onError) onError('fatal_signal_error');
@@ -175,42 +180,45 @@ export class WhatsAppEngine {
           let shouldReconnect = !isInvalidSession;
 
           if (isConflict) {
-            console.warn(`[Engine] CONFLICT detected for ${this.sessionId}. Checking ownership...`);
+            this.conflictCount++;
+            console.warn(`[Engine] CONFLICT detected for ${this.sessionId} (Count: ${this.conflictCount}).`);
 
-            // Give the DB a moment to update status from other instances
-            await new Promise(resolve => setTimeout(resolve, 2000));
-
-            const currentSession = await storage.getItem('sessions', { id: this.sessionId });
-            if (!currentSession || currentSession.status === 'TERMINATED' || currentSession.status === 'DISCONNECTED') {
-              console.log(`[Engine] Session ${this.sessionId} yield to newer session. Stopping.`);
+            if (this.conflictCount > 3) {
+              console.error(`[Engine] Too many conflicts for ${this.sessionId}. Stopping to prevent loop.`);
               shouldReconnect = false;
             } else {
-              // Deeper check: is there any other CONNECTED session for this number?
-              const phoneNumber = currentSession.phoneNumber;
-              if (phoneNumber) {
-                const allSessions = await storage.getItems('sessions', { phoneNumber });
-                const newerActive = allSessions.find(s => s.id !== this.sessionId && s.status === 'CONNECTED');
-                if (newerActive) {
-                  console.log(`[Engine] Newer active session found (${newerActive.id}). Yielding ${this.sessionId}.`);
-                  shouldReconnect = false;
-                  // Avoid marking as TERMINATED so it can be resumed manually, but stop the loop
+              // Wait for DB consistency
+              await new Promise(resolve => setTimeout(resolve, 3000));
+
+              const currentSession = await storage.getItem('sessions', { id: this.sessionId });
+              if (!currentSession || currentSession.status === 'TERMINATED' || currentSession.status === 'DISCONNECTED') {
+                console.log(`[Engine] Session ${this.sessionId} yield to newer session. Stopping.`);
+                shouldReconnect = false;
+              } else {
+                const phoneNumber = currentSession.phoneNumber;
+                if (phoneNumber) {
+                  const allSessions = await storage.getItems('sessions', { phoneNumber });
+                  const newerActive = allSessions.find(s => s.id !== this.sessionId && s.status === 'CONNECTED');
+                  if (newerActive) {
+                    console.log(`[Engine] Newer active session found (${newerActive.id}). Yielding ${this.sessionId}.`);
+                    shouldReconnect = false;
+                  }
                 }
               }
             }
           }
 
-
           if (shouldReconnect) {
-            const delay = isConflict ? 15000 : Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Wait longer on conflict
+            const delay = isConflict ? 20000 : Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Wait longer on conflict
             console.log(`[Engine] Reconnecting in ${delay}ms... (Attempt ${this.retryCount + 1})`);
 
             this.retryCount++;
             setTimeout(() => this.startSession(onQR, onConnected), delay);
           } else {
-            console.log(`[Engine] Session ${this.sessionId} stopped. Reason: ${reason || 'Logged out'}`);
+            console.log(`[Engine] Session ${this.sessionId} stopped. Reason: ${reason || 'Yield/Logout'}`);
             this.status = 'ERROR';
-            await this.cleanupData();
-            if (onError) onError(reason || 'loggedOut');
+            if (reason !== 440) await this.cleanupData(); // Don't wipe keys on conflict yield
+            if (onError) onError(reason || 'stopped');
           }
         }
       });
