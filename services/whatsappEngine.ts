@@ -467,9 +467,19 @@ export class WhatsAppEngine {
                   console.log(`[AutoReply] Match found! RuleID: ${matchedRule._id} | Type: ${matchedRule.replyType || 'text'}`);
 
                   // Simulate human behavior
-                  await this.sock.sendPresenceUpdate('composing', remoteJid);
-                  const humanDelay = Math.floor(Math.random() * 5000) + 3000;
-                  console.log(`[AutoReply] Waiting ${humanDelay}ms...`);
+                  const isAudio = matchedRule.replyType === 'audio';
+                  const presenceType = isAudio ? 'recording' : 'composing';
+
+                  // 1. Initial "thinking" delay
+                  await new Promise(r => setTimeout(r, 1000 + Math.random() * 2000));
+
+                  // 2. Start presence
+                  await this.sock.sendPresenceUpdate(presenceType, remoteJid);
+
+                  // 3. Typing/Recording duration based on content or random
+                  const humanDelay = isAudio ? 4000 : Math.min(8000, 3000 + (matchedRule.response.length * 50));
+                  console.log(`[AutoReply] ${presenceType} for ${humanDelay}ms...`);
+
                   await new Promise(r => setTimeout(r, humanDelay));
                   await this.sock.sendPresenceUpdate('paused', remoteJid);
 
