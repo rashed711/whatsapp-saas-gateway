@@ -172,7 +172,9 @@ export class WhatsAppEngine {
           const errorMessage = lastDisconnect?.error?.message || '';
           const isFatalSignal = errorMessage.includes('Over 2000 messages into the future') ||
             errorMessage.includes('SessionError') ||
-            (lastDisconnect?.error as any)?.name === 'SessionError';
+            errorMessage.includes('MessageCounterError') ||
+            (lastDisconnect?.error as any)?.name === 'SessionError' ||
+            (lastDisconnect?.error as any)?.name === 'MessageCounterError';
 
           if (isFatalSignal) {
             console.error(`[Engine] FATAL DECRYPTION ERROR for ${this.sessionId}: ${errorMessage}. Forcing session reset.`);
