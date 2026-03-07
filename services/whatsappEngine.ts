@@ -125,7 +125,6 @@ export class WhatsAppEngine {
           console.warn(`[Engine] [v17] [FAILURE] No content found for retry.`);
           return undefined;
         },
-        numPrekeys: 200, // v18: Massive pre-key surge to prevent handshake failure
         markOnlineOnConnect: true // v14: Helps refresh metadata
       });
 
