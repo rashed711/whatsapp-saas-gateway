@@ -18,6 +18,10 @@ const SessionSchema = new Schema({
         type: String,
         enum: ['IDLE', 'QR', 'CONNECTED', 'DISCONNECTED', 'TERMINATED'],
         default: 'IDLE'
+    },
+    autoReplyEnabled: {
+        type: Boolean,
+        default: true
     }
 }, {
     timestamps: true

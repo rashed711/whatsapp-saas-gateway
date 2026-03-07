@@ -366,10 +366,12 @@ export class WhatsAppEngine {
                                     msgType = 'document';
                                     msgContent = '[Document]';
                                 }
+                                // v21: Clean extraction for both JID and LID to avoid @suffixes in webhooks
+                                const cleanFrom = remoteJid.split('@')[0];
                                 const payload = {
                                     event: 'message.received',
                                     session_id: this.sessionId,
-                                    from: remoteJid.replace('@s.whatsapp.net', ''),
+                                    from: cleanFrom,
                                     pushName: pushName,
                                     type: msgType,
                                     content: msgContent,
@@ -391,6 +393,12 @@ export class WhatsAppEngine {
                         }
                         // --- Auto Reply Logic ---
                         try {
+                            // Fetch latest session settings to check global toggle
+                            const sessionState = await storage.getItem('sessions', { id: this.sessionId });
+                            if (sessionState && sessionState.autoReplyEnabled === false) {
+                                console.log(`[AutoReply] Skipped for ${remoteJid} (Auto-Replies disabled globally for session ${this.sessionId})`);
+                                continue; // Skip the rest of the auto-reply block
+                            }
                             // 0. Check if Chat is Muted (Human Takeover)
                             const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
                             if (isMuted) {
