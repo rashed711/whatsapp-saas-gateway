@@ -7,22 +7,34 @@ import P from 'pino';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import NodeCache from 'node-cache';
+import { v4 as uuidv4 } from 'uuid';
 import { storage } from './storage.js';
 import { AutoReplyService } from './autoReplyService.js';
 import { useMongoDBAuthState } from './mongoAuth.js';
+import { AuthState, Message } from '../models/index.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// Cache to handle "Over 2000 messages into the future" decryption errors
+const msgRetryCounterCache = new NodeCache();
+// Cache to store sent messages for handling client-side decryption retries (Fix: "Waiting for this message")
+const sentMessagesCache = new NodeCache({ stdTTL: 3600, checkperiod: 600 }); // Store for 1 hour
 export class WhatsAppEngine {
     userId;
     sessionId;
+    instanceId;
     status = 'IDLE';
     sock = null;
     retryCount = 0;
+    conflictCount = 0;
+    decryptionErrorCount = 0;
+    decryptionErrorTimer = null;
     connectionStabilityTimeout = null;
     sentMessageIds = new Set();
     constructor(userId, sessionId) {
         this.userId = userId;
         this.sessionId = sessionId;
+        this.instanceId = uuidv4();
     }
     // Auth path is no longer needed but we keep folder logic just in case or remove if safe
     getAuthPath() {
@@ -59,15 +71,47 @@ export class WhatsAppEngine {
                 version,
                 printQRInTerminal: false,
                 mobile: false,
-                logger: P({ level: 'silent' }),
+                logger: P({ level: 'error' }),
                 browser: Browsers.macOS('Chrome'),
                 defaultQueryTimeoutMs: 60000,
                 connectTimeoutMs: 60000,
                 keepAliveIntervalMs: 30000,
-                syncFullHistory: false,
-                msgRetryCounterCache: undefined,
-                getMessage: async () => undefined,
-                markOnlineOnConnect: false
+                syncFullHistory: false, // v14: Disabled to prevent Signal congestion
+                shouldSyncHistoryMessage: () => false,
+                msgRetryCounterCache,
+                getMessage: async (key) => {
+                    const jid = key.remoteJid;
+                    console.log(`[Engine] [v17] Received RETRY request from ${jid}. ID: ${key.id}`);
+                    try {
+                        if (this.sock?.signalRepository?.clearSession) {
+                            await this.sock.signalRepository.clearSession(jid);
+                            console.log(`[Engine] [v17] Cleared session for ${jid} PRIOR to retry fulfillment.`);
+                        }
+                    }
+                    catch (e) {
+                        console.warn(`[Engine] [v17] Failed to clear session before retry:`, e);
+                    }
+                    // 1. Check memory cache first
+                    const cached = sentMessagesCache.get(key.id);
+                    if (cached) {
+                        console.log(`[Engine] [SUCCESS] Fulfilled retry from memory for: ${key.id}`);
+                        return cached.message || undefined;
+                    }
+                    // 2. Check MongoDB
+                    try {
+                        const stored = await Message.findOne({ id: key.id, sessionId: this.sessionId }).lean();
+                        if (stored && stored.content) {
+                            console.log(`[Engine] [SUCCESS] Fulfilled retry from MongoDB for: ${key.id}`);
+                            return stored.content;
+                        }
+                    }
+                    catch (err) {
+                        console.error('[Engine] [ERROR] DB Fetch failed for retry:', err);
+                    }
+                    console.warn(`[Engine] [v17] [FAILURE] No content found for retry.`);
+                    return undefined;
+                },
+                markOnlineOnConnect: true // v14: Helps refresh metadata
             });
             // Handle Connection Updates
             this.sock.ev.on('connection.update', async (update) => {
@@ -86,34 +130,25 @@ export class WhatsAppEngine {
                     const phoneNumber = userJid ? userJid.split(':')[0] : null;
                     if (phoneNumber) {
                         console.log(`[Engine] Verifying uniqueness for number: ${phoneNumber}`);
-                        // 1. Update this session with the phone number
                         await storage.saveItem('sessions', {
                             id: this.sessionId,
-                            userId: this.userId, // Ensure userId is preserved
+                            instanceId: this.instanceId,
+                            userId: this.userId,
                             phoneNumber: phoneNumber,
                             status: 'CONNECTED',
                             updatedAt: new Date()
                         });
-                        // 2. Check for OTHER sessions with the same phone number
                         const allSessions = await storage.getItems('sessions', { phoneNumber });
-                        // Filter out CURRENT session
                         const duplicates = allSessions.filter(s => s.id !== this.sessionId && s.status !== 'TERMINATED');
                         if (duplicates.length > 0) {
                             console.warn(`[Engine] SECURITY ALERT: Found ${duplicates.length} duplicate sessions for number ${phoneNumber}. Terminating them.`);
                             for (const dup of duplicates) {
                                 console.log(`[Engine] Killing duplicate session: ${dup.id}`);
-                                // Mark as terminated in DB
                                 await storage.saveItem('sessions', { id: dup.id, status: 'TERMINATED' });
-                                // Ideally, we would emit an event to server.ts to kill the specific engine instance,
-                                // but marking it TERMINATED in DB prevents it from being resumed on restart.
-                                // The 440 conflict from WhatsApp will eventually disconnect the zombie if it's running.
                             }
                         }
                     }
-                    // -----------------------------------------------------
                     this.status = 'CONNECTED';
-                    // Delay resetting retryCount to ensure stability. 
-                    // If we disconnect within 15s (e.g. 440 conflict), retryCount will NOT reset, forcing exponential backoff.
                     if (this.connectionStabilityTimeout)
                         clearTimeout(this.connectionStabilityTimeout);
                     this.connectionStabilityTimeout = setTimeout(() => {
@@ -123,33 +158,78 @@ export class WhatsAppEngine {
                     onConnected();
                 }
                 else if (connection === 'close') {
-                    // Reset status to allow reconnection logic to pass the guard in startSession
-                    this.status = 'IDLE';
+                    const reason = lastDisconnect?.error?.output?.statusCode;
+                    console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
+                    if (this.status !== 'ERROR') {
+                        this.status = 'IDLE';
+                    }
                     this.sock = null;
                     if (this.connectionStabilityTimeout)
                         clearTimeout(this.connectionStabilityTimeout);
-                    const reason = lastDisconnect?.error?.output?.statusCode;
-                    console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
-                    // Reason 405: Unauthorized/Invalid Session. Reason 401: Logged Out.
+                    const errorMessage = lastDisconnect?.error?.message || '';
+                    const isFatalSignal = errorMessage.includes('Over 2000 messages into the future') ||
+                        errorMessage.includes('SessionError') ||
+                        errorMessage.includes('MessageCounterError') ||
+                        lastDisconnect?.error?.name === 'SessionError' ||
+                        lastDisconnect?.error?.name === 'MessageCounterError';
+                    if (isFatalSignal) {
+                        console.error(`[Engine] FATAL DECRYPTION ERROR for ${this.sessionId}: ${errorMessage}. Forcing session reset.`);
+                        this.status = 'ERROR';
+                        await this.cleanupData();
+                        if (onError)
+                            onError('fatal_signal_error');
+                        return;
+                    }
+                    const isConflict = reason === 440;
                     const isInvalidSession = reason === 405 || reason === 401 || reason === DisconnectReason.loggedOut;
-                    const shouldReconnect = !isInvalidSession;
+                    let shouldReconnect = !isInvalidSession;
+                    if (isConflict) {
+                        this.conflictCount++;
+                        console.warn(`[Engine] CONFLICT detected for ${this.sessionId} (Count: ${this.conflictCount}).`);
+                        if (this.conflictCount > 3) {
+                            shouldReconnect = false;
+                        }
+                        else {
+                            await new Promise(resolve => setTimeout(resolve, 3000));
+                            const currentSession = await storage.getItem('sessions', { id: this.sessionId });
+                            const isOwner = currentSession?.instanceId === this.instanceId;
+                            if (!isOwner || !currentSession || currentSession.status === 'TERMINATED' || currentSession.status === 'DISCONNECTED') {
+                                shouldReconnect = false;
+                            }
+                            else {
+                                const phoneNumber = currentSession.phoneNumber;
+                                if (phoneNumber) {
+                                    const allSessions = await storage.getItems('sessions', { phoneNumber });
+                                    const newerActive = allSessions.find(s => s.id !== this.sessionId && s.status === 'CONNECTED');
+                                    if (newerActive)
+                                        shouldReconnect = false;
+                                }
+                            }
+                        }
+                    }
                     if (shouldReconnect) {
-                        const delay = Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Exponential backoff max 30s
-                        console.log(`[Engine] Reconnecting in ${delay}ms... (Attempt ${this.retryCount + 1})`);
+                        const delay = isConflict ? 20000 : Math.min(Math.pow(2, this.retryCount) * 1000, 30000);
                         this.retryCount++;
                         setTimeout(() => this.startSession(onQR, onConnected), delay);
                     }
                     else {
-                        console.log(`[Engine] Session ${this.sessionId} stopped. Reason: ${reason || 'Logged out'}`);
                         this.status = 'ERROR';
-                        await this.cleanupData();
+                        if (reason !== 440)
+                            await this.cleanupData();
                         if (onError)
-                            onError(reason || 'loggedOut');
+                            onError(reason || 'stopped');
                     }
                 }
             });
             // Handle Creds Update
-            this.sock.ev.on('creds.update', saveCreds);
+            this.sock.ev.on('creds.update', async () => {
+                try {
+                    await saveCreds();
+                }
+                catch (err) {
+                    console.error('[Engine] Failed to save credentials:', err);
+                }
+            });
             // --- Contact Handling ---
             // 1. Initial Contact Sync from WhatsApp (Phonebook)
             this.sock.ev.on('contacts.upsert', async (contacts) => {
@@ -178,45 +258,97 @@ export class WhatsAppEngine {
                     for (const msg of messages) {
                         let remoteJid = msg.key.remoteJid;
                         console.log(`[Engine] Incoming msg from ${remoteJid}, fromMe: ${msg.key.fromMe}`);
+                        const m = msg.message;
+                        const messageContent = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m;
+                        const textContent = (messageContent?.conversation || messageContent?.extendedTextMessage?.text || messageContent?.imageMessage?.caption || '').trim();
+                        const lowerText = textContent.toLowerCase();
+                        const hasMedia = !!(messageContent?.imageMessage || messageContent?.videoMessage || messageContent?.audioMessage || messageContent?.documentMessage);
+                        // --- v14/v15/v16: Auto Signal Repair for Decryption Issues ---
+                        // If the message is ciphertext (Type 1), we can't read it. We must reset the session.
+                        const isCiphertext = !!msg.messageStubType || (!msg.message && !msg.key.fromMe && !m?.protocolMessage && !m?.senderKeyDistributionMessage);
+                        if (isCiphertext) {
+                            console.warn(`[Engine] [v17] Decryption failure from ${remoteJid}. Forcing Handshake...`);
+                            try {
+                                if (this.sock?.signalRepository?.clearSession) {
+                                    await this.sock.signalRepository.clearSession(remoteJid);
+                                    // Send a "Nudge" to trigger the phone's Signal state update
+                                    await this.sock.sendPresenceUpdate('composing', remoteJid);
+                                    await new Promise(r => setTimeout(r, 1000));
+                                    await this.sock.sendPresenceUpdate('paused', remoteJid);
+                                    // Attempt to notify (This message will trigger a new session)
+                                    await this.sock.sendMessage(remoteJid, { text: '⚠️ عذراً، تم إعادة ضبط تشفير المحادثة لتجاوز تعليق "الانتظار". يرجى إعادة إرسال رسالتك الآن.' });
+                                    console.log(`[Engine] [v17] Handshake Force completed for ${remoteJid}.`);
+                                }
+                            }
+                            catch (e) {
+                                console.error('[Engine] [v17] Handshake Force failed:', e);
+                            }
+                            return; // Skip processing the broken message
+                        }
+                        const isUnmuteCommand = ['#bot', '#unmute', '!bot', '/bot', 'unmute', '#تفعيل'].includes(lowerText);
+                        const isFixCommand = ['#fix', '#اصلاح', '#repair', 'تصليح'].includes(lowerText);
+                        if (isFixCommand) {
+                            console.log(`[Engine] Manual Repair requested for ${remoteJid}`);
+                            try {
+                                if (this.sock?.signalRepository?.clearSession) {
+                                    await this.sock.signalRepository.clearSession(remoteJid);
+                                    await this.send(remoteJid, 'text', '✅ تم إصلاح التشفير لهذا الرقم. يرجى المحاولة مرة أخرى.');
+                                }
+                            }
+                            catch (e) {
+                                console.error('[Engine] Manual Fix failed:', e);
+                            }
+                            return;
+                        }
+                        // --- Global System Commands (#bot) ---
+                        if (isUnmuteCommand) {
+                            console.log(`[Engine] SYSTEM COMMAND detected (fromMe: ${msg.key.fromMe}): UNMUTE for ${remoteJid}`);
+                            try {
+                                await storage.deleteItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
+                                // Optional: Notify on successful unmute (Only once)
+                                // if (!msg.key.fromMe) await this.sock.sendMessage(remoteJid, { text: "🤖 Bot Re-enabled!" });
+                            }
+                            catch (err) {
+                                console.error('[Engine] Failed to unmute chat:', err);
+                            }
+                            // If it's a command, we don't want to trigger auto-replies or takeover
+                            continue;
+                        }
                         if (msg.key.fromMe) {
                             // Ignore bot's own messages (Auto-Replies) to prevent triggering Human Takeover
                             if (msg.key.id && this.sentMessageIds.has(msg.key.id)) {
-                                // console.log(`[Human Takeover] Ignoring bot auto-reply: ${msg.key.id}`);
                                 continue;
                             }
-                            // --- Human Takeover Logic ---
+                            // --- Human Takeover Logic (Muting) ---
                             // If user replies manually, mute the bot for this chat
-                            const targetJid = msg.key.remoteJid;
-                            if (targetJid && !targetJid.includes('@broadcast') && !targetJid.includes('@g.us')) {
-                                // Check for "Unmute" command
-                                const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-                                if (text && (text.toLowerCase() === '#bot' || text.toLowerCase() === '#unmute')) {
-                                    console.log(`[Human Takeover] User re-enabled bot for ${targetJid}`);
-                                    try {
-                                        await storage.deleteItem('muted_chats', { sessionId: this.sessionId, chatId: targetJid });
-                                    }
-                                    catch (err) {
-                                        console.error('[Human Takeover] Failed to unmute chat:', err);
-                                    }
+                            const msgTimestamp = msg.messageTimestamp;
+                            const now = Math.floor(Date.now() / 1000);
+                            const isStale = msgTimestamp && (now - Number(msgTimestamp) > 60);
+                            if (remoteJid && !remoteJid.includes('@broadcast') && !remoteJid.includes('@g.us') && !isStale && type !== 'append') {
+                                // Ignore protocol/system messages
+                                if (m?.protocolMessage || m?.senderKeyDistributionMessage || m?.peerDataOperationRequestMessage)
+                                    continue;
+                                // Only proceed if there's actual content (already checked isUnmuteCommand above)
+                                if (!textContent && !hasMedia)
+                                    continue;
+                                console.log(`[Human Takeover] MANUAL REPLY detected. Chat: ${remoteJid}, Content: "${textContent.substring(0, 50)}", Type: ${type}`);
+                                try {
+                                    await storage.saveItem('muted_chats', {
+                                        sessionId: this.sessionId,
+                                        chatId: remoteJid,
+                                        mutedAt: new Date(),
+                                        userId: this.userId
+                                    });
                                 }
-                                else {
-                                    console.log(`[Human Takeover] Manual reply detected. Muting bot for ${targetJid}`);
-                                    try {
-                                        await storage.saveItem('muted_chats', {
-                                            sessionId: this.sessionId,
-                                            chatId: targetJid,
-                                            mutedAt: new Date(),
-                                            userId: this.userId
-                                        });
-                                    }
-                                    catch (err) {
-                                        console.error('[Human Takeover] Failed to mute chat:', err);
-                                    }
+                                catch (err) {
+                                    console.error('[Human Takeover] Failed to mute chat:', err);
                                 }
+                            }
+                            else if (isStale) {
+                                console.log(`[Human Takeover] Ignored stale manual reply from ${remoteJid} (Age: ${now - Number(msgTimestamp)}s)`);
                             }
                             continue;
                         }
-                        remoteJid = msg.key.remoteJid;
                         // Allow @s.whatsapp.net AND @lid (Lightning IDs)
                         if (!remoteJid || remoteJid.includes('@broadcast') || (!remoteJid.includes('@s.whatsapp.net') && !remoteJid.includes('@lid')))
                             continue;
@@ -296,85 +428,87 @@ export class WhatsAppEngine {
                         // --- Auto Reply Logic ---
                         try {
                             // 0. Check if Chat is Muted (Human Takeover)
-                            // 0. Check if Chat is Muted (Human Takeover)
                             const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
                             if (isMuted) {
-                                console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Muted Mode (Human Takeover).`);
+                                // Still check for match to help debug, but don't send
+                                console.log(`[AutoReply] [Muted Mode] Rule check for ${remoteJid} (skipped sending).`);
                             }
-                            else {
-                                // --- Robust Text Extraction ---
-                                let textContent = '';
-                                const m = msg.message;
-                                // 1. Unwrap Ephemeral/ViewOnce
-                                const messageContent = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m;
-                                if (messageContent) {
-                                    textContent =
-                                        messageContent.conversation ||
-                                            messageContent.extendedTextMessage?.text ||
-                                            messageContent.imageMessage?.caption ||
-                                            messageContent.videoMessage?.caption ||
-                                            messageContent.documentMessage?.caption ||
-                                            '';
-                                }
-                                if (textContent) {
-                                    console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
-                                    const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
-                                    if (matchedRule) {
-                                        console.log(`[AutoReply] Match found! RuleID: ${matchedRule._id} | Type: ${matchedRule.replyType || 'text'}`);
-                                        // Simulate human behavior
-                                        await this.sock.sendPresenceUpdate('composing', remoteJid);
-                                        const humanDelay = Math.floor(Math.random() * 5000) + 3000;
-                                        console.log(`[AutoReply] Waiting ${humanDelay}ms...`);
-                                        await new Promise(r => setTimeout(r, humanDelay));
-                                        await this.sock.sendPresenceUpdate('paused', remoteJid);
-                                        // Send Reply based on Type
-                                        const responseText = matchedRule.response; // Caption or Text
-                                        try {
-                                            let sentMsg;
-                                            if (matchedRule.replyType === 'image' && matchedRule.mediaUrl) {
-                                                sentMsg = await this.sock.sendMessage(remoteJid, {
-                                                    image: { url: matchedRule.mediaUrl },
-                                                    caption: responseText
-                                                }, { quoted: msg });
-                                            }
-                                            else if (matchedRule.replyType === 'video' && matchedRule.mediaUrl) {
-                                                sentMsg = await this.sock.sendMessage(remoteJid, {
-                                                    video: { url: matchedRule.mediaUrl },
-                                                    caption: responseText
-                                                }, { quoted: msg });
-                                            }
-                                            else if (matchedRule.replyType === 'document' && matchedRule.mediaUrl) {
-                                                sentMsg = await this.sock.sendMessage(remoteJid, {
-                                                    document: { url: matchedRule.mediaUrl },
-                                                    mimetype: 'application/pdf', // Default, maybe detect from extension later
-                                                    fileName: matchedRule.fileName || 'file.pdf',
-                                                    caption: responseText
-                                                }, { quoted: msg });
-                                            }
-                                            else if (matchedRule.replyType === 'audio' && matchedRule.mediaUrl) {
-                                                sentMsg = await this.sock.sendMessage(remoteJid, {
-                                                    audio: { url: matchedRule.mediaUrl },
-                                                    ptt: true // Send as Voice Note
-                                                }, { quoted: msg });
-                                            }
-                                            else {
-                                                // Default: Text
-                                                sentMsg = await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
-                                            }
-                                            if (sentMsg?.key?.id) {
-                                                this.sentMessageIds.add(sentMsg.key.id);
-                                                setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id), 15000); // Clear after 15s
-                                            }
-                                            console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
+                            else if (textContent) {
+                                console.log(`[AutoReply] [DEBUG] Checking rules. User: ${this.userId}, Session: ${this.sessionId}, Content: "${textContent}"`);
+                                const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
+                                if (matchedRule) {
+                                    console.log(`[AutoReply] Match found! RuleID: ${matchedRule._id} | Type: ${matchedRule.replyType || 'text'}`);
+                                    // Simulate human behavior
+                                    const isAudio = matchedRule.replyType === 'audio';
+                                    const presenceType = isAudio ? 'recording' : 'composing';
+                                    // 1. Initial "thinking" delay
+                                    await new Promise(r => setTimeout(r, 1000 + Math.random() * 2000));
+                                    // 2. Start presence
+                                    await this.sock.sendPresenceUpdate(presenceType, remoteJid);
+                                    // 3. Typing/Recording duration based on content or random
+                                    const humanDelay = isAudio ? 4000 : Math.min(8000, 3000 + (matchedRule.response.length * 50));
+                                    console.log(`[AutoReply] ${presenceType} for ${humanDelay}ms...`);
+                                    await new Promise(r => setTimeout(r, humanDelay));
+                                    await this.sock.sendPresenceUpdate('paused', remoteJid);
+                                    // Send Reply based on Type
+                                    const responseText = matchedRule.response; // Caption or Text
+                                    try {
+                                        let sentMsg;
+                                        if (matchedRule.replyType === 'image' && matchedRule.mediaUrl) {
+                                            sentMsg = await this.sock.sendMessage(remoteJid, {
+                                                image: { url: matchedRule.mediaUrl },
+                                                caption: responseText
+                                            }, { quoted: msg });
                                         }
-                                        catch (sendErr) {
-                                            console.error('[AutoReply] Failed to send response:', sendErr);
-                                            // Fallback to text if media fails?
-                                            await this.sock.sendMessage(remoteJid, { text: `[Error sending media] ${responseText}` }, { quoted: msg });
+                                        else if (matchedRule.replyType === 'video' && matchedRule.mediaUrl) {
+                                            sentMsg = await this.sock.sendMessage(remoteJid, {
+                                                video: { url: matchedRule.mediaUrl },
+                                                caption: responseText
+                                            }, { quoted: msg });
                                         }
+                                        else if (matchedRule.replyType === 'document' && matchedRule.mediaUrl) {
+                                            sentMsg = await this.sock.sendMessage(remoteJid, {
+                                                document: { url: matchedRule.mediaUrl },
+                                                mimetype: 'application/pdf', // Default, maybe detect from extension later
+                                                fileName: matchedRule.fileName || 'file.pdf',
+                                                caption: responseText
+                                            }, { quoted: msg });
+                                        }
+                                        else if (matchedRule.replyType === 'audio' && matchedRule.mediaUrl) {
+                                            sentMsg = await this.sock.sendMessage(remoteJid, {
+                                                audio: { url: matchedRule.mediaUrl },
+                                                ptt: true // Send as Voice Note
+                                            }, { quoted: msg });
+                                        }
+                                        else {
+                                            // Default: Text
+                                            sentMsg = await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
+                                        }
+                                        if (sentMsg?.key?.id) {
+                                            this.sentMessageIds.add(sentMsg.key.id);
+                                            sentMessagesCache.set(sentMsg.key.id, sentMsg);
+                                            // v13: Persistent Store for retries
+                                            try {
+                                                await Message.create({
+                                                    sessionId: this.sessionId,
+                                                    remoteJid: remoteJid,
+                                                    fromMe: true,
+                                                    id: sentMsg.key.id,
+                                                    content: sentMsg.message,
+                                                    timestamp: Math.floor(Date.now() / 1000)
+                                                });
+                                            }
+                                            catch (dbErr) {
+                                                console.error('[Engine] Failed to persist auto-reply for retry:', dbErr);
+                                            }
+                                            setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id), 15000);
+                                        }
+                                        console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
                                     }
-                                    else {
-                                        console.log(`[AutoReply] No match found for: "${textContent}"`);
+                                    catch (sendErr) {
+                                        console.error('[AutoReply] Failed to send response:', sendErr);
+                                        // Fallback to text if media fails?
+                                        await this.sock.sendMessage(remoteJid, { text: `[Error sending media] ${responseText}` }, { quoted: msg });
                                     }
                                 }
                             }
@@ -483,9 +617,10 @@ export class WhatsAppEngine {
         const jid = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
         console.log(`[API] Sending ${type} to ${to}...`);
         try {
+            let sentMsg;
             if (type === 'text') {
                 // Plain text message
-                await this.sock.sendMessage(jid, { text: content });
+                sentMsg = await this.sock.sendMessage(jid, { text: content });
             }
             else {
                 // Media message handling
@@ -494,19 +629,19 @@ export class WhatsAppEngine {
                     // A. Handle URL (Best for n8n/Automation)
                     console.log(`[API] Detected Media URL for ${type}`);
                     if (type === 'image') {
-                        await this.sock.sendMessage(jid, { image: { url: content }, caption: caption });
+                        sentMsg = await this.sock.sendMessage(jid, { image: { url: content }, caption: caption });
                     }
                     else if (type === 'audio') {
-                        await this.sock.sendMessage(jid, { audio: { url: content }, ptt: true }); // Send as Voice Note
+                        sentMsg = await this.sock.sendMessage(jid, { audio: { url: content }, ptt: true }); // Send as Voice Note
                     }
                     else if (type === 'video') {
-                        await this.sock.sendMessage(jid, { video: { url: content }, caption: caption });
+                        sentMsg = await this.sock.sendMessage(jid, { video: { url: content }, caption: caption });
                     }
                     else if (type === 'document') {
                         // Try to guess mimetype or default to pdf (WhatsApp requires mimetype for documents usually)
                         // Ideally we'd fetch HEAD to check content-type, but for now we default to pdf/octet-stream
                         // n8n users should ensure their URL is direct.
-                        await this.sock.sendMessage(jid, {
+                        sentMsg = await this.sock.sendMessage(jid, {
                             document: { url: content },
                             mimetype: 'application/pdf',
                             fileName: caption || content.split('/').pop() || 'file.pdf'
@@ -520,18 +655,37 @@ export class WhatsAppEngine {
                         throw new Error("Invalid media content: Base64 data missing");
                     const buffer = Buffer.from(base64Part, 'base64');
                     if (type === 'image') {
-                        await this.sock.sendMessage(jid, { image: buffer, caption: caption });
+                        sentMsg = await this.sock.sendMessage(jid, { image: buffer, caption: caption });
                     }
                     else if (type === 'audio') {
-                        await this.sock.sendMessage(jid, { audio: buffer, ptt: true });
+                        sentMsg = await this.sock.sendMessage(jid, { audio: buffer, ptt: true });
                     }
                     else if (type === 'video') {
-                        await this.sock.sendMessage(jid, { video: buffer, caption: caption });
+                        sentMsg = await this.sock.sendMessage(jid, { video: buffer, caption: caption });
                     }
                     else if (type === 'document') {
-                        await this.sock.sendMessage(jid, { document: buffer, mimetype: 'application/pdf', fileName: caption || 'file.pdf' });
+                        sentMsg = await this.sock.sendMessage(jid, { document: buffer, mimetype: 'application/pdf', fileName: caption || 'file.pdf' });
                     }
                 }
+            }
+            if (sentMsg?.key?.id) {
+                this.sentMessageIds.add(sentMsg.key.id);
+                sentMessagesCache.set(sentMsg.key.id, sentMsg);
+                // v13: Persistent Store for retries
+                try {
+                    await Message.create({
+                        sessionId: this.sessionId,
+                        remoteJid: jid,
+                        fromMe: true,
+                        id: sentMsg.key.id,
+                        content: sentMsg.message,
+                        timestamp: Math.floor(Date.now() / 1000)
+                    });
+                }
+                catch (dbErr) {
+                    console.error('[Engine] Failed to persist sent message for retry:', dbErr);
+                }
+                setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id), 15000);
             }
             return { success: true, timestamp: Date.now() };
         }
@@ -560,7 +714,10 @@ export class WhatsAppEngine {
     async cleanupData() {
         try {
             // 1. Clear MongoDB Auth State (SaaS Core)
-            await storage.deleteItem('auth_states', { sessionId: this.sessionId });
+            // The model name is 'AuthState', Mongoose pluralizes to 'authstates' or 'auth_states' 
+            // but the storage.deleteItem uses the collection name passed.
+            // Based on mongoAuth.ts, it uses the AuthState model.
+            await AuthState.deleteMany({ sessionId: this.sessionId });
             // 2. Update Session Status in DB to prevent automatic resumption
             await storage.saveItem('sessions', { id: this.sessionId, status: 'DISCONNECTED' });
             // 3. Optional: Clear local files (Legacy/Fallback)

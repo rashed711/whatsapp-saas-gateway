@@ -570,7 +570,7 @@ app.get('/api/autoreply', authenticateToken, async (req, res) => {
 app.post('/api/autoreply', authenticateToken, async (req, res) => {
     try {
         console.log(`[POST] /api/autoreply - User: ${req.user.userId}`, req.body);
-        const { keyword, response, matchType, sessionId } = req.body;
+        const { keyword, response, matchType, sessionId, replyType, mediaUrl, fileName } = req.body;
         if (!keyword || !response)
             return res.status(400).json({ error: 'Missing keyword or response' });
         const rule = await AutoReplyService.createRule({
@@ -579,6 +579,9 @@ app.post('/api/autoreply', authenticateToken, async (req, res) => {
             keyword,
             response,
             matchType: matchType || 'exact',
+            replyType: replyType || 'text',
+            mediaUrl: mediaUrl || undefined,
+            fileName: fileName || undefined,
             isActive: true
         });
         res.json(rule);

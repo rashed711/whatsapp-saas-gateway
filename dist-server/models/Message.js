@@ -11,5 +11,8 @@ const MessageSchema = new Schema({
     timestamps: true
 });
 // Index for efficient querying by session and chat
+MessageSchema.index({ id: 1 }); // v15: Critical for getMessage performance
 MessageSchema.index({ sessionId: 1, remoteJid: 1, timestamp: -1 });
+// TTL index to automatically delete sent messages after 24 hours (86400 seconds)
+MessageSchema.index({ createdAt: 1 }, { expireAfterSeconds: 86400 });
 export const Message = mongoose.model('Message', MessageSchema);

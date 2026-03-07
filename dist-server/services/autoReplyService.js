@@ -96,11 +96,14 @@ export class AutoReplyService {
         console.log(`[AutoReplyService] Finding match for: "${messageContent}" (User: ${userId}, Session: ${sessionId})`);
         const allRules = await storage.getItems('autoreplies', { userId });
         const activeRules = allRules.filter(r => r.isActive);
-        console.log(`[AutoReplyService] Total rules: ${allRules.length}, Active: ${activeRules.length}`);
+        console.log(`[AutoReplyService] [DEBUG] Found ${allRules.length} rules for user ${userId}. Active: ${activeRules.length}`);
+        if (activeRules.length > 0) {
+            console.log(`[AutoReplyService] [DEBUG] Rule Keywords: ${activeRules.map(r => r.keyword).join(' | ')}`);
+        }
         const contentLower = messageContent.toLowerCase().trim();
         for (const rule of activeRules) {
             if (rule.sessionId && rule.sessionId !== sessionId) {
-                console.log(`[AutoReplyService] Skipping rule ${rule._id} (Session mismatch)`);
+                console.log(`[AutoReplyService] Skipping rule ${rule._id} for user ${userId} - Session Mismatch (Rule: ${rule.sessionId}, Current: ${sessionId})`);
                 continue;
             }
             // Support multiple keywords split by comma
