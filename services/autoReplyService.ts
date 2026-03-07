@@ -114,7 +114,7 @@ export class AutoReplyService {
 
         for (const rule of activeRules) {
             if (rule.sessionId && rule.sessionId !== sessionId) {
-                console.log(`[AutoReplyService] Skipping rule ${rule._id} (Session mismatch)`);
+                console.log(`[AutoReplyService] Skipping rule ${rule._id} for user ${userId} - Session Mismatch (Rule: ${rule.sessionId}, Current: ${sessionId})`);
                 continue;
             }
 

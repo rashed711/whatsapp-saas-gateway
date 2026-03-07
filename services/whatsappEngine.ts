@@ -271,64 +271,63 @@ export class WhatsAppEngine {
 
         if (type === 'notify' || type === 'append') {
           const contactsToUpdate = [];
-
           for (const msg of messages) {
             let remoteJid = msg.key.remoteJid;
             console.log(`[Engine] Incoming msg from ${remoteJid}, fromMe: ${msg.key.fromMe}`);
 
+            const m = msg.message;
+            const messageContent = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m;
+            const textContent = (messageContent?.conversation || messageContent?.extendedTextMessage?.text || messageContent?.imageMessage?.caption || '').trim();
+            const lowerText = textContent.toLowerCase();
+            const hasMedia = !!(messageContent?.imageMessage || messageContent?.videoMessage || messageContent?.audioMessage || messageContent?.documentMessage);
+            const isUnmuteCommand = ['#bot', '#unmute', '!bot', '/bot', 'unmute', '#تفعيل'].includes(lowerText);
+
+            // --- Global System Commands (#bot) ---
+            if (isUnmuteCommand) {
+              console.log(`[Engine] SYSTEM COMMAND detected (fromMe: ${msg.key.fromMe}): UNMUTE for ${remoteJid}`);
+              try {
+                await storage.deleteItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
+                // Optional: Notify on successful unmute (Only once)
+                // if (!msg.key.fromMe) await this.sock.sendMessage(remoteJid, { text: "🤖 Bot Re-enabled!" });
+              } catch (err) {
+                console.error('[Engine] Failed to unmute chat:', err);
+              }
+              // If it's a command, we don't want to trigger auto-replies or takeover
+              continue;
+            }
+
             if (msg.key.fromMe) {
               // Ignore bot's own messages (Auto-Replies) to prevent triggering Human Takeover
               if (msg.key.id && this.sentMessageIds.has(msg.key.id)) {
-                // console.log(`[Human Takeover] Ignoring bot auto-reply: ${msg.key.id}`);
                 continue;
               }
 
-              // --- Human Takeover Logic ---
+              // --- Human Takeover Logic (Muting) ---
               // If user replies manually, mute the bot for this chat
-              const targetJid = msg.key.remoteJid;
               const msgTimestamp = msg.messageTimestamp;
               const now = Math.floor(Date.now() / 1000);
               const isStale = msgTimestamp && (now - Number(msgTimestamp) > 60);
 
-              if (targetJid && !targetJid.includes('@broadcast') && !targetJid.includes('@g.us') && !isStale && type !== 'append') {
-                const m = msg.message;
-                const messageContent = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m;
-
-                // 1. Ignore protocol/system messages
+              if (remoteJid && !remoteJid.includes('@broadcast') && !remoteJid.includes('@g.us') && !isStale && type !== 'append') {
+                // Ignore protocol/system messages
                 if (m?.protocolMessage || m?.senderKeyDistributionMessage || m?.peerDataOperationRequestMessage) continue;
 
-                const text = (messageContent?.conversation || messageContent?.extendedTextMessage?.text || messageContent?.imageMessage?.caption || '').trim();
-                const hasMedia = !!(messageContent?.imageMessage || messageContent?.videoMessage || messageContent?.audioMessage || messageContent?.documentMessage);
+                // Only proceed if there's actual content (already checked isUnmuteCommand above)
+                if (!textContent && !hasMedia) continue;
 
-                // 2. Only proceed if there's actual content
-                if (!text && !hasMedia) continue;
-
-                // 3. Robust Command Check (Case Insensitive, variants)
-                const lowerText = text.toLowerCase();
-                const isUnmute = ['#bot', '#unmute', '!bot', '/bot', 'unmute', '#تفعيل'].includes(lowerText);
-
-                if (isUnmute) {
-                  console.log(`[Human Takeover] SYSTEM COMMAND: User re-enabled bot for ${targetJid}`);
-                  try {
-                    await storage.deleteItem('muted_chats', { sessionId: this.sessionId, chatId: targetJid });
-                  } catch (err) {
-                    console.error('[Human Takeover] Failed to unmute chat:', err);
-                  }
-                } else {
-                  console.log(`[Human Takeover] MANUAL REPLY detected. Chat: ${targetJid}, Content: "${text.substring(0, 50)}", Type: ${type}`);
-                  try {
-                    await storage.saveItem('muted_chats', {
-                      sessionId: this.sessionId,
-                      chatId: targetJid,
-                      mutedAt: new Date(),
-                      userId: this.userId
-                    });
-                  } catch (err) {
-                    console.error('[Human Takeover] Failed to mute chat:', err);
-                  }
+                console.log(`[Human Takeover] MANUAL REPLY detected. Chat: ${remoteJid}, Content: "${textContent.substring(0, 50)}", Type: ${type}`);
+                try {
+                  await storage.saveItem('muted_chats', {
+                    sessionId: this.sessionId,
+                    chatId: remoteJid,
+                    mutedAt: new Date(),
+                    userId: this.userId
+                  });
+                } catch (err) {
+                  console.error('[Human Takeover] Failed to mute chat:', err);
                 }
               } else if (isStale) {
-                console.log(`[Human Takeover] Ignored stale manual reply from ${targetJid} (Age: ${now - Number(msgTimestamp)}s)`);
+                console.log(`[Human Takeover] Ignored stale manual reply from ${remoteJid} (Age: ${now - Number(msgTimestamp)}s)`);
               }
               continue;
             }
@@ -455,95 +454,73 @@ export class WhatsAppEngine {
             // --- Auto Reply Logic ---
             try {
               // 0. Check if Chat is Muted (Human Takeover)
-              // 0. Check if Chat is Muted (Human Takeover)
               const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
 
               if (isMuted) {
                 // Still check for match to help debug, but don't send
                 console.log(`[AutoReply] [Muted Mode] Rule check for ${remoteJid} (skipped sending).`);
-              } else {
-                // --- Robust Text Extraction ---
-                let textContent = '';
-                const m = msg.message;
+              } else if (textContent) {
+                console.log(`[AutoReply] [DEBUG] Checking rules. User: ${this.userId}, Session: ${this.sessionId}, Content: "${textContent}"`);
+                const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
 
-                // 1. Unwrap Ephemeral/ViewOnce
-                const messageContent = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m;
+                if (matchedRule) {
+                  console.log(`[AutoReply] Match found! RuleID: ${matchedRule._id} | Type: ${matchedRule.replyType || 'text'}`);
 
-                if (messageContent) {
-                  textContent =
-                    messageContent.conversation ||
-                    messageContent.extendedTextMessage?.text ||
-                    messageContent.imageMessage?.caption ||
-                    messageContent.videoMessage?.caption ||
-                    messageContent.documentMessage?.caption ||
-                    '';
-                }
+                  // Simulate human behavior
+                  await this.sock.sendPresenceUpdate('composing', remoteJid);
+                  const humanDelay = Math.floor(Math.random() * 5000) + 3000;
+                  console.log(`[AutoReply] Waiting ${humanDelay}ms...`);
+                  await new Promise(r => setTimeout(r, humanDelay));
+                  await this.sock.sendPresenceUpdate('paused', remoteJid);
 
-                if (textContent) {
-                  console.log(`[AutoReply] [DEBUG] Checking rules. User: ${this.userId}, Session: ${this.sessionId}, Content: "${textContent}"`);
-                  const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
+                  // Send Reply based on Type
+                  const responseText = matchedRule.response; // Caption or Text
 
-                  if (matchedRule) {
-                    console.log(`[AutoReply] Match found! RuleID: ${matchedRule._id} | Type: ${matchedRule.replyType || 'text'}`);
+                  try {
+                    let sentMsg;
+                    if (matchedRule.replyType === 'image' && matchedRule.mediaUrl) {
+                      sentMsg = await this.sock.sendMessage(remoteJid, {
+                        image: { url: matchedRule.mediaUrl },
+                        caption: responseText
+                      }, { quoted: msg });
 
-                    // Simulate human behavior
-                    await this.sock.sendPresenceUpdate('composing', remoteJid);
-                    const humanDelay = Math.floor(Math.random() * 5000) + 3000;
-                    console.log(`[AutoReply] Waiting ${humanDelay}ms...`);
-                    await new Promise(r => setTimeout(r, humanDelay));
-                    await this.sock.sendPresenceUpdate('paused', remoteJid);
+                    } else if (matchedRule.replyType === 'video' && matchedRule.mediaUrl) {
+                      sentMsg = await this.sock.sendMessage(remoteJid, {
+                        video: { url: matchedRule.mediaUrl },
+                        caption: responseText
+                      }, { quoted: msg });
 
-                    // Send Reply based on Type
-                    const responseText = matchedRule.response; // Caption or Text
+                    } else if (matchedRule.replyType === 'document' && matchedRule.mediaUrl) {
+                      sentMsg = await this.sock.sendMessage(remoteJid, {
+                        document: { url: matchedRule.mediaUrl },
+                        mimetype: 'application/pdf', // Default, maybe detect from extension later
+                        fileName: matchedRule.fileName || 'file.pdf',
+                        caption: responseText
+                      }, { quoted: msg });
 
-                    try {
-                      let sentMsg;
-                      if (matchedRule.replyType === 'image' && matchedRule.mediaUrl) {
-                        sentMsg = await this.sock.sendMessage(remoteJid, {
-                          image: { url: matchedRule.mediaUrl },
-                          caption: responseText
-                        }, { quoted: msg });
+                    } else if (matchedRule.replyType === 'audio' && matchedRule.mediaUrl) {
+                      sentMsg = await this.sock.sendMessage(remoteJid, {
+                        audio: { url: matchedRule.mediaUrl },
+                        ptt: true // Send as Voice Note
+                      }, { quoted: msg });
 
-                      } else if (matchedRule.replyType === 'video' && matchedRule.mediaUrl) {
-                        sentMsg = await this.sock.sendMessage(remoteJid, {
-                          video: { url: matchedRule.mediaUrl },
-                          caption: responseText
-                        }, { quoted: msg });
-
-                      } else if (matchedRule.replyType === 'document' && matchedRule.mediaUrl) {
-                        sentMsg = await this.sock.sendMessage(remoteJid, {
-                          document: { url: matchedRule.mediaUrl },
-                          mimetype: 'application/pdf', // Default, maybe detect from extension later
-                          fileName: matchedRule.fileName || 'file.pdf',
-                          caption: responseText
-                        }, { quoted: msg });
-
-                      } else if (matchedRule.replyType === 'audio' && matchedRule.mediaUrl) {
-                        sentMsg = await this.sock.sendMessage(remoteJid, {
-                          audio: { url: matchedRule.mediaUrl },
-                          ptt: true // Send as Voice Note
-                        }, { quoted: msg });
-
-                      } else {
-                        // Default: Text
-                        sentMsg = await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
-                      }
-
-                      if (sentMsg?.key?.id) {
-                        this.sentMessageIds.add(sentMsg.key.id);
-                        setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000); // Clear after 15s
-                      }
-                      console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
-
-                    } catch (sendErr) {
-                      console.error('[AutoReply] Failed to send response:', sendErr);
-                      // Fallback to text if media fails?
-                      await this.sock.sendMessage(remoteJid, { text: `[Error sending media] ${responseText}` }, { quoted: msg });
+                    } else {
+                      // Default: Text
+                      sentMsg = await this.sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg });
                     }
 
-                  } else {
-                    console.log(`[AutoReply] No match found for: "${textContent}"`);
+                    if (sentMsg?.key?.id) {
+                      this.sentMessageIds.add(sentMsg.key.id);
+                      setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000); // Clear after 15s
+                    }
+                    console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
+
+                  } catch (sendErr) {
+                    console.error('[AutoReply] Failed to send response:', sendErr);
+                    // Fallback to text if media fails?
+                    await this.sock.sendMessage(remoteJid, { text: `[Error sending media] ${responseText}` }, { quoted: msg });
                   }
+
                 }
               }
             } catch (err) {
