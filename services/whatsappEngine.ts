@@ -93,16 +93,7 @@ export class WhatsAppEngine {
         msgRetryCounterCache,
         getMessage: async (key) => {
           const jid = key.remoteJid!;
-          console.log(`[Engine] [v17] Received RETRY request from ${jid}. ID: ${key.id}`);
-
-          try {
-            if (this.sock?.signalRepository?.clearSession) {
-              await this.sock.signalRepository.clearSession(jid);
-              console.log(`[Engine] [v17] Cleared session for ${jid} PRIOR to retry fulfillment.`);
-            }
-          } catch (e) {
-            console.warn(`[Engine] [v17] Failed to clear session before retry:`, e);
-          }
+          console.log(`[Engine] [v19] Received RETRY request from ${jid}. ID: ${key.id}`);
 
           // 1. Check memory cache first
           const cached = sentMessagesCache.get(key.id!);
@@ -188,21 +179,6 @@ export class WhatsAppEngine {
           }
           this.sock = null;
           if (this.connectionStabilityTimeout) clearTimeout(this.connectionStabilityTimeout);
-
-          const errorMessage = lastDisconnect?.error?.message || '';
-          const isFatalSignal = errorMessage.includes('Over 2000 messages into the future') ||
-            errorMessage.includes('SessionError') ||
-            errorMessage.includes('MessageCounterError') ||
-            (lastDisconnect?.error as any)?.name === 'SessionError' ||
-            (lastDisconnect?.error as any)?.name === 'MessageCounterError';
-
-          if (isFatalSignal) {
-            console.error(`[Engine] FATAL DECRYPTION ERROR for ${this.sessionId}: ${errorMessage}. Forcing session reset.`);
-            this.status = 'ERROR';
-            await this.cleanupData();
-            if (onError) onError('fatal_signal_error');
-            return;
-          }
 
           const isConflict = reason === 440;
           const isInvalidSession = reason === 405 || reason === 401 || reason === DisconnectReason.loggedOut;
@@ -296,23 +272,7 @@ export class WhatsAppEngine {
             const isCiphertext = !!msg.messageStubType || (!msg.message && !msg.key.fromMe && !m?.protocolMessage && !m?.senderKeyDistributionMessage);
 
             if (isCiphertext) {
-              console.warn(`[Engine] [v17] Decryption failure from ${remoteJid}. Forcing Handshake...`);
-              try {
-                if (this.sock?.signalRepository?.clearSession) {
-                  await this.sock.signalRepository.clearSession(remoteJid);
-
-                  // Send a "Nudge" to trigger the phone's Signal state update
-                  await this.sock.sendPresenceUpdate('composing', remoteJid);
-                  await new Promise(r => setTimeout(r, 1000));
-                  await this.sock.sendPresenceUpdate('paused', remoteJid);
-
-                  // Attempt to notify (This message will trigger a new session)
-                  await this.sock.sendMessage(remoteJid, { text: '⚠️ عذراً، تم إعادة ضبط تشفير المحادثة لتجاوز تعليق "الانتظار". يرجى إعادة إرسال رسالتك الآن.' });
-                  console.log(`[Engine] [v17] Handshake Force completed for ${remoteJid}.`);
-                }
-              } catch (e) {
-                console.error('[Engine] [v17] Handshake Force failed:', e);
-              }
+              console.warn(`[Engine] [v19] Decryption failure from ${remoteJid}. Letting Baileys internal retry handle it natively.`);
               return; // Skip processing the broken message
             }
 

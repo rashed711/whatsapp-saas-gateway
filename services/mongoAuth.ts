@@ -13,6 +13,8 @@ export const useMongoDBAuthState = async (sessionId: string): Promise<{ state: A
     }
     console.log(`[Auth] Cache ready (${allStoredKeys.length} keys).`);
 
+    let writeMutex = Promise.resolve();
+
     const writeToDB = async (updates: { [key: string]: any }) => {
         const operations = Object.entries(updates).map(([key, value]) => {
             if (value) {
@@ -34,8 +36,15 @@ export const useMongoDBAuthState = async (sessionId: string): Promise<{ state: A
         });
 
         if (operations.length > 0) {
-            // CRITICAL: We MUST await this to prevent "Stale State Load" on restart
-            await AuthState.bulkWrite(operations, { ordered: false });
+            // CRITICAL (v19): Strictly enforce atomic/sequential writes using a promise queue
+            writeMutex = writeMutex.then(async () => {
+                try {
+                    await AuthState.bulkWrite(operations, { ordered: false });
+                } catch (err) {
+                    console.error(`[Auth] Failed to bulkWrite keys for session ${sessionId}:`, err);
+                }
+            });
+            await writeMutex;
         }
     };
 
