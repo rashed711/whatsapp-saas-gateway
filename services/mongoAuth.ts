@@ -3,18 +3,17 @@ import { AuthState } from '../models/index.js';
 
 export const useMongoDBAuthState = async (sessionId: string): Promise<{ state: AuthenticationState, saveCreds: () => Promise<void> }> => {
 
-    // RADICAL FIX: In-Memory Cache for zero-latency ratchet updates
     const memoryKeys: { [key: string]: any } = {};
 
-    // Load ALL keys for this session into memory on startup
-    console.log(`[Auth] Loading all keys for session ${sessionId} into memory...`);
+    // 1. Initial Load: Populate cache for speed
+    console.log(`[Auth] Initializing memory cache for session ${sessionId}...`);
     const allStoredKeys = await AuthState.find({ sessionId }).lean();
     for (const item of allStoredKeys) {
         memoryKeys[item.key] = JSON.parse(JSON.stringify(item.data), BufferJSON.reviver);
     }
-    console.log(`[Auth] Loaded ${allStoredKeys.length} keys for ${sessionId}.`);
+    console.log(`[Auth] Cache ready (${allStoredKeys.length} keys).`);
 
-    const writeDataBatch = async (updates: { [key: string]: any }) => {
+    const writeToDB = async (updates: { [key: string]: any }) => {
         const operations = Object.entries(updates).map(([key, value]) => {
             if (value) {
                 const jsonData = JSON.parse(JSON.stringify(value, BufferJSON.replacer));
@@ -35,10 +34,8 @@ export const useMongoDBAuthState = async (sessionId: string): Promise<{ state: A
         });
 
         if (operations.length > 0) {
-            // We do NOT await this in the critical path of the ratchet
-            AuthState.bulkWrite(operations, { ordered: false }).catch(err => {
-                console.error(`[Auth] Async Write-Back failed for ${sessionId}:`, err);
-            });
+            // CRITICAL: We MUST await this to prevent "Stale State Load" on restart
+            await AuthState.bulkWrite(operations, { ordered: false });
         }
     };
 
@@ -50,12 +47,29 @@ export const useMongoDBAuthState = async (sessionId: string): Promise<{ state: A
             keys: {
                 get: async (type, ids) => {
                     const data: { [key: string]: SignalDataTypeMap[typeof type] } = {};
+                    const missingKeys: string[] = [];
+
                     for (const id of ids) {
                         const key = `${type}-${id}`;
                         if (memoryKeys[key]) {
                             data[id] = memoryKeys[key];
+                        } else {
+                            missingKeys.push(id);
                         }
                     }
+
+                    // READ-THROUGH: If anything is missing in memory, check DB
+                    if (missingKeys.length > 0) {
+                        const dbKeys = missingKeys.map(id => `${type}-${id}`);
+                        const dbResults = await AuthState.find({ sessionId, key: { $in: dbKeys } }).lean();
+                        for (const res of dbResults) {
+                            const val = JSON.parse(JSON.stringify(res.data), BufferJSON.reviver);
+                            const id = res.key.split(`${type}-`)[1];
+                            data[id] = val;
+                            memoryKeys[res.key] = val; // Cache it
+                        }
+                    }
+
                     return data;
                 },
                 set: async (data) => {
@@ -65,24 +79,24 @@ export const useMongoDBAuthState = async (sessionId: string): Promise<{ state: A
                             const value = data[type][id];
                             const key = `${type}-${id}`;
 
-                            // 1. Update Memory INSTANTLY (Zero Latency)
+                            // Update Memory
                             if (value) {
                                 memoryKeys[key] = value;
                             } else {
                                 delete memoryKeys[key];
                             }
 
-                            // 2. Queue for DB PERSISTENCE
+                            // Prepare DB Update
                             dbUpdates[key] = value;
                         }
                     }
-                    // Async persistence
-                    writeDataBatch(dbUpdates);
+                    // CRITICAL: Await before returning to engine
+                    await writeToDB(dbUpdates);
                 }
             }
         },
         saveCreds: async () => {
-            // Memory is always up-to-date, but we persist to DB
+            memoryKeys['creds'] = creds; // Sync memory explicitly
             const jsonData = JSON.parse(JSON.stringify(creds, BufferJSON.replacer));
             await AuthState.findOneAndUpdate(
                 { sessionId, key: 'creds' },
