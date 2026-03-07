@@ -30,6 +30,8 @@ export class WhatsAppEngine {
   private sock: any = null;
   private retryCount = 0;
   private conflictCount = 0;
+  private decryptionErrorCount = 0;
+  private decryptionErrorTimer: NodeJS.Timeout | null = null;
   private connectionStabilityTimeout: NodeJS.Timeout | null = null;
   private sentMessageIds = new Set<string>();
 
@@ -200,7 +202,7 @@ export class WhatsAppEngine {
               const isOwner = currentSession?.instanceId === this.instanceId;
 
               if (!isOwner || !currentSession || currentSession.status === 'TERMINATED' || currentSession.status === 'DISCONNECTED') {
-                console.log(`[Engine] Session ${this.sessionId} yield to newer instance (${currentSession?.instanceId}). Stopping.`);
+                console.log(`[Engine] Session ${this.sessionId} yield to newer instance. Local: ${this.instanceId.slice(0, 8)}, DB: ${currentSession?.instanceId?.slice(0, 8)}. Stopping.`);
                 shouldReconnect = false;
               } else {
                 const phoneNumber = currentSession.phoneNumber;
@@ -314,7 +316,24 @@ export class WhatsAppEngine {
               (!msg.message && !msg.key.fromMe && !msg.messageStubType);
 
             if (isCiphertext) {
-              console.warn(`[Engine] Decryption failure from ${remoteJid}. Attempting Signal Repair...`);
+              this.decryptionErrorCount++;
+              console.warn(`[Engine] Decryption failure from ${remoteJid} (Total: ${this.decryptionErrorCount}). Attempting Signal Repair...`);
+
+              // Flush timer
+              if (!this.decryptionErrorTimer) {
+                this.decryptionErrorTimer = setTimeout(() => {
+                  this.decryptionErrorCount = 0;
+                  this.decryptionErrorTimer = null;
+                }, 30000);
+              }
+
+              if (this.decryptionErrorCount > 15) {
+                console.error(`[Engine] DECRYPTION STORM DETECTED for ${this.sessionId}. Session is unsalvageable. Forcing logout.`);
+                this.status = 'ERROR';
+                await this.logout(); // This calls cleanupData()
+                return;
+              }
+
               try {
                 // Force clear session for this JID
                 if (this.sock?.signalRepository?.clearSession) {

@@ -40,8 +40,18 @@ export const useMongoDBAuthState = async (sessionId: string): Promise<{ state: A
         }
     };
 
-    // Load initial credentials
-    const results = await readDataBatch(['creds']);
+    // Load initial credentials with a small retry loop for transient DB errors
+    let results: { [key: string]: any } = {};
+    for (let i = 0; i < 3; i++) {
+        results = await readDataBatch(['creds']);
+        if (results['creds']) break;
+        // Check if any other keys exist for this session
+        const exists = await AuthState.exists({ sessionId });
+        if (!exists) break; // New session, no need to retry
+        console.warn(`[Auth] Credentials missing for ${sessionId}, but other keys exist. Retrying (${i + 1}/3)...`);
+        await new Promise(r => setTimeout(r, 1000));
+    }
+
     const creds: AuthenticationCreds = results['creds'] || initAuthCreds();
 
     return {
@@ -77,7 +87,7 @@ export const useMongoDBAuthState = async (sessionId: string): Promise<{ state: A
             const jsonData = JSON.parse(JSON.stringify(creds, BufferJSON.replacer));
             await AuthState.findOneAndUpdate(
                 { sessionId, key: 'creds' },
-                { $set: { data: jsonData } },
+                { $set: { sessionId, key: 'creds', data: jsonData } },
                 { upsert: true }
             );
         }
