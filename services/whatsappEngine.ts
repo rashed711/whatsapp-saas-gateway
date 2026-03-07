@@ -398,10 +398,13 @@ export class WhatsAppEngine {
                   msgContent = '[Document]';
                 }
 
+                // v21: Clean extraction for both JID and LID to avoid @suffixes in webhooks
+                const cleanFrom = remoteJid.split('@')[0];
+
                 const payload = {
                   event: 'message.received',
                   session_id: this.sessionId,
-                  from: remoteJid.replace('@s.whatsapp.net', ''),
+                  from: cleanFrom,
                   pushName: pushName,
                   type: msgType,
                   content: msgContent,
