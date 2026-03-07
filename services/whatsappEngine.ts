@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { storage } from './storage.js';
 import { AutoReplyService } from './autoReplyService.js';
 import { useMongoDBAuthState } from './mongoAuth.js';
+import { AuthState } from '../models/index.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -156,13 +157,16 @@ export class WhatsAppEngine {
 
           onConnected();
         } else if (connection === 'close') {
-          // Reset status to allow reconnection logic to pass the guard in startSession
-          this.status = 'IDLE';
-          this.sock = null;
-          if (this.connectionStabilityTimeout) clearTimeout(this.connectionStabilityTimeout);
-
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
           console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
+
+          // Reset status to allow reconnection logic to pass the guard in startSession
+          // BUT only if not a fatal error
+          if (this.status !== 'ERROR') {
+            this.status = 'IDLE';
+          }
+          this.sock = null;
+          if (this.connectionStabilityTimeout) clearTimeout(this.connectionStabilityTimeout);
 
           // Detect Signal "Over 2000 messages into the future" error or session desync
           const errorMessage = lastDisconnect?.error?.message || '';
@@ -717,7 +721,10 @@ export class WhatsAppEngine {
   async cleanupData() {
     try {
       // 1. Clear MongoDB Auth State (SaaS Core)
-      await storage.deleteItem('auth_states', { sessionId: this.sessionId });
+      // The model name is 'AuthState', Mongoose pluralizes to 'authstates' or 'auth_states' 
+      // but the storage.deleteItem uses the collection name passed.
+      // Based on mongoAuth.ts, it uses the AuthState model.
+      await AuthState.deleteMany({ sessionId: this.sessionId });
 
       // 2. Update Session Status in DB to prevent automatic resumption
       await storage.saveItem('sessions', { id: this.sessionId, status: 'DISCONNECTED' });
