@@ -3,7 +3,7 @@ const MessageSchema = new Schema({
     sessionId: { type: String, required: true },
     remoteJid: { type: String, required: true },
     fromMe: { type: Boolean, required: true },
-    content: { type: Schema.Types.Mixed }, // Flexible for different message structures
+    content: { type: String, required: true }, // v20: Strict String to preserve Baileys Buffers
     timestamp: { type: Number, required: true },
     pushName: { type: String },
     id: { type: String, required: true }
