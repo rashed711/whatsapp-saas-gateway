@@ -291,9 +291,18 @@ export class WhatsAppEngine {
               const isStale = msgTimestamp && (now - Number(msgTimestamp) > 60);
 
               if (targetJid && !targetJid.includes('@broadcast') && !targetJid.includes('@g.us') && !isStale && type !== 'append') {
-                // Check for "Unmute" command
-                const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-                if (text && (text.toLowerCase() === '#bot' || text.toLowerCase() === '#unmute')) {
+                // Determine content to see if it's a real manual reply
+                const m = msg.message;
+                const messageContent = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m;
+                const text = (messageContent?.conversation || messageContent?.extendedTextMessage?.text || messageContent?.imageMessage?.caption || '').trim();
+                const hasMedia = !!(messageContent?.imageMessage || messageContent?.videoMessage || messageContent?.audioMessage || messageContent?.documentMessage);
+
+                // If message has no content (e.g. sync stub), skip mute logic
+                if (!text && !hasMedia) {
+                  continue;
+                }
+
+                if (text.toLowerCase() === '#bot' || text.toLowerCase() === '#unmute') {
                   console.log(`[Human Takeover] User re-enabled bot for ${targetJid}`);
                   try {
                     await storage.deleteItem('muted_chats', { sessionId: this.sessionId, chatId: targetJid });
@@ -301,7 +310,7 @@ export class WhatsAppEngine {
                     console.error('[Human Takeover] Failed to unmute chat:', err);
                   }
                 } else {
-                  console.log(`[Human Takeover] Manual reply detected for ${targetJid} (Time: ${msgTimestamp}). Muting bot.`);
+                  console.log(`[Human Takeover] Manual reply detected for ${targetJid} (Type: ${type}). Muting bot.`);
                   try {
                     await storage.saveItem('muted_chats', {
                       sessionId: this.sessionId,
