@@ -23,6 +23,9 @@ const __dirname = path.dirname(__filename);
 // Cache to handle "Over 2000 messages into the future" decryption errors
 const msgRetryCounterCache = new NodeCache();
 
+// Cache to store sent messages for handling client-side decryption retries (Fix: "Waiting for this message")
+const sentMessagesCache = new NodeCache({ stdTTL: 3600, checkperiod: 600 }); // Store for 1 hour
+
 export class WhatsAppEngine {
   private userId: string;
   private sessionId: string;
@@ -88,7 +91,12 @@ export class WhatsAppEngine {
         syncFullHistory: false,
         shouldSyncHistoryMessage: () => false, // Disable history sync to prevent Signal key desync
         msgRetryCounterCache,
-        getMessage: async () => undefined,
+        getMessage: async (key) => {
+          if (sentMessagesCache.get(key.id!)) {
+            return (sentMessagesCache.get(key.id!) as any).message || undefined;
+          }
+          return undefined;
+        },
         markOnlineOnConnect: false
       });
 
@@ -521,6 +529,7 @@ export class WhatsAppEngine {
 
                     if (sentMsg?.key?.id) {
                       this.sentMessageIds.add(sentMsg.key.id);
+                      sentMessagesCache.set(sentMsg.key.id, sentMsg); // New: Store for decryption retries
                       setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000); // Clear after 15s
                     }
                     console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
@@ -702,6 +711,7 @@ export class WhatsAppEngine {
 
       if (sentMsg?.key?.id) {
         this.sentMessageIds.add(sentMsg.key.id);
+        sentMessagesCache.set(sentMsg.key.id, sentMsg); // New: Store for decryption retries
         setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000); // Clear after 15s
       }
 
