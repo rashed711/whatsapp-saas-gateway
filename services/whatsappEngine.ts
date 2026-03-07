@@ -457,7 +457,7 @@ export class WhatsAppEngine {
                 }
 
                 if (textContent) {
-                  console.log(`[AutoReply] Checking rules for: "${textContent}" from ${remoteJid}`);
+                  console.log(`[AutoReply] [DEBUG] Checking rules. User: ${this.userId}, Session: ${this.sessionId}, Content: "${textContent}"`);
                   const matchedRule = await AutoReplyService.getResponse(this.userId, textContent, this.sessionId);
 
                   if (matchedRule) {

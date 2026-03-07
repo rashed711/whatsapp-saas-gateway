@@ -105,7 +105,10 @@ export class AutoReplyService {
         const allRules: IAutoReply[] = await storage.getItems('autoreplies', { userId });
         const activeRules = allRules.filter(r => r.isActive);
 
-        console.log(`[AutoReplyService] Total rules: ${allRules.length}, Active: ${activeRules.length}`);
+        console.log(`[AutoReplyService] [DEBUG] Found ${allRules.length} rules for user ${userId}. Active: ${activeRules.length}`);
+        if (activeRules.length > 0) {
+            console.log(`[AutoReplyService] [DEBUG] Rule Keywords: ${activeRules.map(r => r.keyword).join(' | ')}`);
+        }
 
         const contentLower = messageContent.toLowerCase().trim();
 
