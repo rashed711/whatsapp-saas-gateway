@@ -427,6 +427,14 @@ export class WhatsAppEngine {
 
             // --- Auto Reply Logic ---
             try {
+              // Fetch latest session settings to check global toggle
+              const sessionState = await storage.getItem('sessions', { id: this.sessionId });
+
+              if (sessionState && sessionState.autoReplyEnabled === false) {
+                console.log(`[AutoReply] Skipped for ${remoteJid} (Auto-Replies disabled globally for session ${this.sessionId})`);
+                continue; // Skip the rest of the auto-reply block
+              }
+
               // 0. Check if Chat is Muted (Human Takeover)
               const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
 

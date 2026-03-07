@@ -149,6 +149,34 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
         }
     };
 
+    const handleToggleRule = async (id: string, currentStatus: boolean) => {
+        try {
+            // Optimistic UI update
+            setRules(rules.map(r => r._id === id ? { ...r, isActive: !currentStatus } : r));
+
+            const token = localStorage.getItem('token');
+            const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3050').replace(/\/$/, '');
+            const res = await fetch(`${baseUrl}/api/autoreply/${id}/toggle`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                },
+                body: JSON.stringify({ isActive: !currentStatus })
+            });
+
+            if (!res.ok) {
+                // Revert on failure
+                setRules(rules.map(r => r._id === id ? { ...r, isActive: currentStatus } : r));
+                alert('Failed to toggle rule');
+            }
+        } catch (error) {
+            console.error('Failed to toggle rule', error);
+            // Revert on failure
+            setRules(rules.map(r => r._id === id ? { ...r, isActive: currentStatus } : r));
+        }
+    };
+
     const getSessionName = (id?: string) => {
         if (!id) return 'All Devices (Global)';
         const session = sessions.find(s => s.id === id);
@@ -205,6 +233,15 @@ const AutoReply: React.FC<AutoReplyProps> = ({ socket }) => {
                                         {rule.keyword}
                                     </h3>
                                     <div className="flex items-center gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button
+                                            onClick={() => handleToggleRule(rule._id, rule.isActive)}
+                                            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-gray-900 transition-colors duration-200 ${rule.isActive ? 'bg-emerald-500' : 'bg-gray-600'} mr-2`}
+                                            title={rule.isActive ? 'Disable Rule' : 'Enable Rule'}
+                                        >
+                                            <span
+                                                className={`pointer-events-none absolute left-0 inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition-transform duration-200 ${rule.isActive ? 'translate-x-[calc(100%+2px)]' : 'translate-x-[2px]'}`}
+                                            />
+                                        </button>
                                         <button
                                             onClick={() => handleEdit(rule)}
                                             className="text-gray-400 hover:text-blue-400 p-1 rounded-full hover:bg-blue-500/10 transition-colors"

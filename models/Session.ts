@@ -9,6 +9,7 @@ export interface ISession extends Document {
   webhookUrl?: string; // Legacy
   webhookUrls?: string[]; // Legacy (Keep for migration if needed, or deprecate)
   webhooks?: { name: string; url: string }[]; // New: Named Webhooks
+  autoReplyEnabled?: boolean; // Toggles all auto-replies for this session
   createdAt?: string;
   updatedAt?: string;
 }
@@ -33,6 +34,10 @@ const SessionSchema = new Schema<ISession>({
     type: String,
     enum: ['IDLE', 'QR', 'CONNECTED', 'DISCONNECTED', 'TERMINATED'],
     default: 'IDLE'
+  },
+  autoReplyEnabled: {
+    type: Boolean,
+    default: true
   }
 }, {
   timestamps: true

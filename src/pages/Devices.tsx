@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Smartphone, RefreshCw, QrCode, LogOut, CheckCircle2, Plus, Trash2, X, AlertCircle, Code, Copy, Check } from 'lucide-react';
+import { Smartphone, RefreshCw, QrCode, LogOut, CheckCircle2, Plus, Trash2, X, AlertCircle, Code, Copy, Check, Bot } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 
 interface Session {
@@ -10,6 +10,7 @@ interface Session {
     webhookUrl?: string; // Legacy
     webhookUrls?: string[]; // Legacy
     webhooks?: { name: string; url: string }[]; // New
+    autoReplyEnabled?: boolean;
 }
 
 interface DevicesProps {
@@ -145,6 +146,39 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
             socket.emit('logout', { sessionId });
         }
     };
+
+    const handleToggleAutoReply = async (sessionId: string, currentStatus: boolean | undefined) => {
+        // If undefined, it defaults to true
+        const isCurrentlyEnabled = currentStatus !== false;
+
+        try {
+            // Optimistic UI Update
+            setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, autoReplyEnabled: !isCurrentlyEnabled } : s));
+
+            const token = localStorage.getItem('token');
+            const baseUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || `${window.location.protocol}//${window.location.hostname}:3050`;
+
+            const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/toggle-autoreply`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ enabled: !isCurrentlyEnabled })
+            });
+
+            if (!res.ok) {
+                // Revert
+                setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, autoReplyEnabled: isCurrentlyEnabled } : s));
+                alert('فشل تغيير حالة الرد الآلي');
+            }
+        } catch (error) {
+            console.error(error);
+            // Revert
+            setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, autoReplyEnabled: isCurrentlyEnabled } : s));
+        }
+    };
+
 
     const [showWebhookModal, setShowWebhookModal] = useState(false);
 
@@ -359,6 +393,20 @@ const Devices: React.FC<DevicesProps> = ({ socket }) => {
                                         className="w-full py-2 text-purple-400 hover:text-purple-600 text-xs font-bold transition-colors flex items-center justify-center gap-1 border-t border-slate-50 pt-2"
                                     >
                                         <div className="w-3 h-3 rounded-full bg-purple-500 flex items-center justify-center text-[8px] text-white">W</div> إعدادات Webhook
+                                    </button>
+
+                                    <button
+                                        onClick={() => handleToggleAutoReply(session.id, session.autoReplyEnabled)}
+                                        className={`w-full py-3 text-xs font-bold transition-colors flex items-center justify-between px-4 border-t border-slate-50 mt-1 ${session.autoReplyEnabled !== false ? 'text-emerald-600 bg-emerald-50/50 hover:bg-emerald-50' : 'text-slate-400 bg-slate-50/50 hover:bg-slate-50'}`}
+                                        title="إيقاف أو تشغيل الرد الآلي بالكامل لهذا الرقم"
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <Bot size={14} className={session.autoReplyEnabled !== false ? 'text-emerald-500' : 'text-slate-400'} />
+                                            الرد الآلي ({session.autoReplyEnabled !== false ? 'مفعل' : 'معطل'})
+                                        </div>
+                                        <div className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors duration-200 ${session.autoReplyEnabled !== false ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                                            <span className={`pointer-events-none absolute left-0 inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition-transform duration-200 ${session.autoReplyEnabled !== false ? 'translate-x-[calc(100%+2px)]' : 'translate-x-[2px]'}`} />
+                                        </div>
                                     </button>
                                 </div>
                             </div>

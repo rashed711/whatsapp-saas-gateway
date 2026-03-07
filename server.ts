@@ -629,6 +629,33 @@ app.put('/api/sessions/:sessionId/webhook', authenticateToken, async (req: any, 
     }
 });
 
+// Toggle Session Auto-Reply
+app.put('/api/sessions/:sessionId/toggle-autoreply', authenticateToken, async (req: any, res) => {
+    const { sessionId } = req.params;
+    const { enabled } = req.body;
+
+    // Isolation Check
+    const session = await storage.getItem('sessions', { id: sessionId });
+    if (!session || session.userId !== req.user.userId) {
+        return res.status(404).json({ error: 'Session not found or access denied' });
+    }
+
+    try {
+        const updatedSession = { ...session, autoReplyEnabled: !!enabled };
+        if (updatedSession._id) delete updatedSession._id;
+        delete updatedSession.createdAt;
+        delete updatedSession.updatedAt;
+
+        await storage.saveItem('sessions', updatedSession);
+
+        // Sync in-memory cache if needed (though engine will read fresh from DB)
+        res.json({ success: true, autoReplyEnabled: updatedSession.autoReplyEnabled });
+    } catch (error: any) {
+        console.error('Toggle Auto-Reply error:', error);
+        res.status(500).json({ error: 'Failed to toggle Auto-Reply', details: error.message || error });
+    }
+});
+
 
 // --- Auto Reply Routes ---
 
@@ -688,6 +715,20 @@ app.delete('/api/autoreply/:id', authenticateToken, async (req: any, res) => {
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: 'Failed to delete rule' });
+    }
+});
+
+// Toggle Rule Status
+app.put('/api/autoreply/:id/toggle', authenticateToken, async (req: any, res) => {
+    try {
+        const { isActive } = req.body;
+        console.log(`[PUT] /api/autoreply/${req.params.id}/toggle - User: ${req.user.userId}, Active: ${isActive}`);
+        const success = await AutoReplyService.toggleRule(req.params.id, req.user.userId, !!isActive);
+        if (!success) return res.status(404).json({ error: 'Rule not found or unauthorized' });
+        res.json({ success: true, isActive: !!isActive });
+    } catch (e: any) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
     }
 });
 
