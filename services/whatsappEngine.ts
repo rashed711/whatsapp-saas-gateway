@@ -88,28 +88,32 @@ export class WhatsAppEngine {
         defaultQueryTimeoutMs: 60000,
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
-        syncFullHistory: true, // v13: Re-enabled but limited to help Signal identity
-        shouldSyncHistoryMessage: () => true,
-        // options: { numPrekeys: 100 }, // v13: Increased for robustness
+        syncFullHistory: false, // v14: Disabled to prevent Signal congestion
+        shouldSyncHistoryMessage: () => false,
         msgRetryCounterCache,
         getMessage: async (key) => {
-          // 1. Check memory cache first (Speed)
+          console.log(`[Engine] Received retry request for: ${key.id}`);
+          // 1. Check memory cache first
           const cached = sentMessagesCache.get(key.id!);
-          if (cached) return (cached as any).message || undefined;
+          if (cached) {
+            console.log(`[Engine] Fulfilled retry from memory for: ${key.id}`);
+            return (cached as any).message || undefined;
+          }
 
-          // 2. Check MongoDB (Persistence across restarts)
+          // 2. Check MongoDB
           try {
             const stored = await Message.findOne({ sessionId: this.sessionId, id: key.id }).lean();
             if (stored && stored.content) {
-              console.log(`[Engine] Fulfilled decryption retry from DB for message ID: ${key.id}`);
-              return stored.content; // In our v13 implementation, 'content' stores the proto.IMessage
+              console.log(`[Engine] Fulfilled retry from MongoDB for: ${key.id}`);
+              return stored.content;
             }
           } catch (err) {
-            console.error('[Engine] Failed to fetch message for retry:', err);
+            console.error('[Engine] DB Fetch failed for retry:', err);
           }
+          console.warn(`[Engine] FAILED to fulfill retry for: ${key.id}. Content not found.`);
           return undefined;
         },
-        markOnlineOnConnect: false
+        markOnlineOnConnect: true // v14: Helps refresh metadata
       });
 
       // Handle Connection Updates
@@ -300,7 +304,35 @@ export class WhatsAppEngine {
             const textContent = (messageContent?.conversation || messageContent?.extendedTextMessage?.text || messageContent?.imageMessage?.caption || '').trim();
             const lowerText = textContent.toLowerCase();
             const hasMedia = !!(messageContent?.imageMessage || messageContent?.videoMessage || messageContent?.audioMessage || messageContent?.documentMessage);
+
+            // --- v14: Auto Signal Repair for Decryption Issues ---
+            const isCiphertext = !!msg.messageStubType || (!msg.message && !msg.key.fromMe);
+            if (isCiphertext) {
+              console.warn(`[Engine] Potential decryption issue for ${remoteJid}. Attempting auto-fix...`);
+              try {
+                if (this.sock?.signalRepository?.clearSession) {
+                  await this.sock.signalRepository.clearSession(remoteJid);
+                }
+              } catch (e) {
+                console.error('[Engine] Auto-fix failed:', e);
+              }
+            }
+
             const isUnmuteCommand = ['#bot', '#unmute', '!bot', '/bot', 'unmute', '#تفعيل'].includes(lowerText);
+            const isFixCommand = ['#fix', '#اصلاح', '#repair'].includes(lowerText);
+
+            if (isFixCommand) {
+              console.log(`[Engine] Manual Repair requested for ${remoteJid}`);
+              try {
+                if (this.sock?.signalRepository?.clearSession) {
+                  await this.sock.signalRepository.clearSession(remoteJid);
+                  await this.send(remoteJid, 'text', '✅ تم إصلاح التشفير لهذا الرقم. يرجى المحاولة مرة أخرى.');
+                }
+              } catch (e) {
+                console.error('[Engine] Manual Fix failed:', e);
+              }
+              return;
+            }
 
             // --- Global System Commands (#bot) ---
             if (isUnmuteCommand) {
@@ -350,44 +382,6 @@ export class WhatsAppEngine {
                 console.log(`[Human Takeover] Ignored stale manual reply from ${remoteJid} (Age: ${now - Number(msgTimestamp)}s)`);
               }
               continue;
-            }
-
-            remoteJid = msg.key.remoteJid;
-
-            // --- Signal Repair Logic ---
-            // Detect and fix decryption errors on the fly
-            // messageStubType 1 is CIPHERTEXT
-            const isCiphertext = msg.messageStubType === 'CIPHERTEXT' || msg.messageStubType === 1 ||
-              (!msg.message && !msg.key.fromMe && !msg.messageStubType);
-
-            if (isCiphertext) {
-              this.decryptionErrorCount++;
-              console.warn(`[Engine] Decryption failure from ${remoteJid} (Total: ${this.decryptionErrorCount}). Attempting Signal Repair...`);
-
-              // Flush timer
-              if (!this.decryptionErrorTimer) {
-                this.decryptionErrorTimer = setTimeout(() => {
-                  this.decryptionErrorCount = 0;
-                  this.decryptionErrorTimer = null;
-                }, 30000);
-              }
-
-              if (this.decryptionErrorCount > 15) {
-                console.error(`[Engine] DECRYPTION STORM DETECTED for ${this.sessionId}. Session is unsalvageable. Forcing logout.`);
-                this.status = 'ERROR';
-                await this.logout(); // This calls cleanupData()
-                return;
-              }
-
-              try {
-                // Force clear session for this JID
-                if (this.sock?.signalRepository?.clearSession) {
-                  await this.sock.signalRepository.clearSession(remoteJid);
-                  console.log(`[Engine] Cleared Signal session for ${remoteJid}.`);
-                }
-              } catch (repairErr) {
-                console.error('[Engine] Signal Repair failed:', repairErr);
-              }
             }
 
             // Allow @s.whatsapp.net AND @lid (Lightning IDs)
