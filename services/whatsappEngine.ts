@@ -92,25 +92,27 @@ export class WhatsAppEngine {
         shouldSyncHistoryMessage: () => false,
         msgRetryCounterCache,
         getMessage: async (key) => {
-          console.log(`[Engine] Received retry request for: ${key.id}`);
+          console.log(`[Engine] >>> Received RETRY request for MsgID: ${key.id} from: ${key.remoteJid}`);
+
           // 1. Check memory cache first
           const cached = sentMessagesCache.get(key.id!);
           if (cached) {
-            console.log(`[Engine] Fulfilled retry from memory for: ${key.id}`);
+            console.log(`[Engine] [SUCCESS] Fulfilled retry from memory for: ${key.id}`);
             return (cached as any).message || undefined;
           }
 
           // 2. Check MongoDB
           try {
-            const stored = await Message.findOne({ sessionId: this.sessionId, id: key.id }).lean();
+            const stored = await Message.findOne({ id: key.id, sessionId: this.sessionId }).lean();
             if (stored && stored.content) {
-              console.log(`[Engine] Fulfilled retry from MongoDB for: ${key.id}`);
+              console.log(`[Engine] [SUCCESS] Fulfilled retry from MongoDB for: ${key.id}`);
               return stored.content;
             }
           } catch (err) {
-            console.error('[Engine] DB Fetch failed for retry:', err);
+            console.error('[Engine] [ERROR] DB Fetch failed for retry:', err);
           }
-          console.warn(`[Engine] FAILED to fulfill retry for: ${key.id}. Content not found.`);
+
+          console.warn(`[Engine] [FAILURE] Could not fulfill retry for: ${key.id}. Message content missing in DB/Cache.`);
           return undefined;
         },
         markOnlineOnConnect: true // v14: Helps refresh metadata
@@ -305,21 +307,22 @@ export class WhatsAppEngine {
             const lowerText = textContent.toLowerCase();
             const hasMedia = !!(messageContent?.imageMessage || messageContent?.videoMessage || messageContent?.audioMessage || messageContent?.documentMessage);
 
-            // --- v14: Auto Signal Repair for Decryption Issues ---
-            const isCiphertext = !!msg.messageStubType || (!msg.message && !msg.key.fromMe);
+            // --- v14/v15: Auto Signal Repair for Decryption Issues ---
+            const isCiphertext = !!msg.messageStubType || (!msg.message && !msg.key.fromMe && !m?.protocolMessage && !m?.senderKeyDistributionMessage);
+
             if (isCiphertext) {
-              console.warn(`[Engine] Potential decryption issue for ${remoteJid}. Attempting auto-fix...`);
+              console.warn(`[Engine] [Signal Desync] Potential decryption issue from ${remoteJid}. Attempting auto-fix...`);
               try {
                 if (this.sock?.signalRepository?.clearSession) {
                   await this.sock.signalRepository.clearSession(remoteJid);
                 }
               } catch (e) {
-                console.error('[Engine] Auto-fix failed:', e);
+                console.error('[Engine] [Signal Desync] Auto-fix failed:', e);
               }
             }
 
             const isUnmuteCommand = ['#bot', '#unmute', '!bot', '/bot', 'unmute', '#تفعيل'].includes(lowerText);
-            const isFixCommand = ['#fix', '#اصلاح', '#repair'].includes(lowerText);
+            const isFixCommand = ['#fix', '#اصلاح', '#repair', 'تصليح'].includes(lowerText);
 
             if (isFixCommand) {
               console.log(`[Engine] Manual Repair requested for ${remoteJid}`);
