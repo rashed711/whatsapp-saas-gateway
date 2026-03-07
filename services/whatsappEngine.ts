@@ -14,7 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { storage } from './storage.js';
 import { AutoReplyService } from './autoReplyService.js';
 import { useMongoDBAuthState } from './mongoAuth.js';
-import { AuthState } from '../models/index.js';
+import { AuthState, Message } from '../models/index.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -88,12 +88,24 @@ export class WhatsAppEngine {
         defaultQueryTimeoutMs: 60000,
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
-        syncFullHistory: false,
-        shouldSyncHistoryMessage: () => false, // Disable history sync to prevent Signal key desync
+        syncFullHistory: true, // v13: Re-enabled but limited to help Signal identity
+        shouldSyncHistoryMessage: () => true,
+        // options: { numPrekeys: 100 }, // v13: Increased for robustness
         msgRetryCounterCache,
         getMessage: async (key) => {
-          if (sentMessagesCache.get(key.id!)) {
-            return (sentMessagesCache.get(key.id!) as any).message || undefined;
+          // 1. Check memory cache first (Speed)
+          const cached = sentMessagesCache.get(key.id!);
+          if (cached) return (cached as any).message || undefined;
+
+          // 2. Check MongoDB (Persistence across restarts)
+          try {
+            const stored = await Message.findOne({ sessionId: this.sessionId, id: key.id }).lean();
+            if (stored && stored.content) {
+              console.log(`[Engine] Fulfilled decryption retry from DB for message ID: ${key.id}`);
+              return stored.content; // In our v13 implementation, 'content' stores the proto.IMessage
+            }
+          } catch (err) {
+            console.error('[Engine] Failed to fetch message for retry:', err);
           }
           return undefined;
         },
@@ -529,8 +541,23 @@ export class WhatsAppEngine {
 
                     if (sentMsg?.key?.id) {
                       this.sentMessageIds.add(sentMsg.key.id);
-                      sentMessagesCache.set(sentMsg.key.id, sentMsg); // New: Store for decryption retries
-                      setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000); // Clear after 15s
+                      sentMessagesCache.set(sentMsg.key.id, sentMsg);
+
+                      // v13: Persistent Store for retries
+                      try {
+                        await Message.create({
+                          sessionId: this.sessionId,
+                          remoteJid: remoteJid,
+                          fromMe: true,
+                          id: sentMsg.key.id,
+                          content: sentMsg.message,
+                          timestamp: Math.floor(Date.now() / 1000)
+                        });
+                      } catch (dbErr) {
+                        console.error('[Engine] Failed to persist auto-reply for retry:', dbErr);
+                      }
+
+                      setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000);
                     }
                     console.log(`[AutoReply] Sent ${matchedRule.replyType || 'text'} response.`);
 
@@ -711,8 +738,23 @@ export class WhatsAppEngine {
 
       if (sentMsg?.key?.id) {
         this.sentMessageIds.add(sentMsg.key.id);
-        sentMessagesCache.set(sentMsg.key.id, sentMsg); // New: Store for decryption retries
-        setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000); // Clear after 15s
+        sentMessagesCache.set(sentMsg.key.id, sentMsg);
+
+        // v13: Persistent Store for retries
+        try {
+          await Message.create({
+            sessionId: this.sessionId,
+            remoteJid: jid,
+            fromMe: true,
+            id: sentMsg.key.id,
+            content: sentMsg.message,
+            timestamp: Math.floor(Date.now() / 1000)
+          });
+        } catch (dbErr) {
+          console.error('[Engine] Failed to persist sent message for retry:', dbErr);
+        }
+
+        setTimeout(() => this.sentMessageIds.delete(sentMsg.key.id!), 15000);
       }
 
       return { success: true, timestamp: Date.now() };
