@@ -84,7 +84,7 @@ export class WhatsAppEngine {
         printQRInTerminal: false,
         mobile: false,
         logger: P({ level: 'error' }),
-        browser: Browsers.macOS('Chrome'),
+        browser: ['Mac OS', 'Safari', '10.15.7'], // v20: More stable identity
         defaultQueryTimeoutMs: 60000,
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
@@ -107,7 +107,9 @@ export class WhatsAppEngine {
             const stored = await Message.findOne({ id: key.id, sessionId: this.sessionId }).lean();
             if (stored && stored.content) {
               console.log(`[Engine] [SUCCESS] Fulfilled retry from MongoDB for: ${key.id}`);
-              return stored.content;
+              // v20: Safely revive Protobuf buffers
+              const parsedContent = JSON.parse(stored.content as string, BufferJSON.reviver);
+              return parsedContent;
             }
           } catch (err) {
             console.error('[Engine] [ERROR] DB Fetch failed for retry:', err);
@@ -495,14 +497,15 @@ export class WhatsAppEngine {
                       this.sentMessageIds.add(sentMsg.key.id);
                       sentMessagesCache.set(sentMsg.key.id, sentMsg);
 
-                      // v13: Persistent Store for retries
+                      // v13/v20: Persistent Store for retries (Strict JSON string)
                       try {
                         await Message.create({
                           sessionId: this.sessionId,
                           remoteJid: remoteJid,
                           fromMe: true,
                           id: sentMsg.key.id,
-                          content: sentMsg.message,
+                          // v20: Force stringify using Baileys replacer to protect Uint8Arrays
+                          content: JSON.stringify(sentMsg.message, BufferJSON.replacer),
                           timestamp: Math.floor(Date.now() / 1000)
                         });
                       } catch (dbErr) {
@@ -692,14 +695,15 @@ export class WhatsAppEngine {
         this.sentMessageIds.add(sentMsg.key.id);
         sentMessagesCache.set(sentMsg.key.id, sentMsg);
 
-        // v13: Persistent Store for retries
+        // v13/v20: Persistent Store for retries
         try {
           await Message.create({
             sessionId: this.sessionId,
             remoteJid: jid,
             fromMe: true,
             id: sentMsg.key.id,
-            content: sentMsg.message,
+            // v20: Force stringify using Baileys replacer to protect Uint8Arrays
+            content: JSON.stringify(sentMsg.message, BufferJSON.replacer),
             timestamp: Math.floor(Date.now() / 1000)
           });
         } catch (dbErr) {
