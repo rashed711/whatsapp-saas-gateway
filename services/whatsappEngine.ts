@@ -92,7 +92,17 @@ export class WhatsAppEngine {
         shouldSyncHistoryMessage: () => false,
         msgRetryCounterCache,
         getMessage: async (key) => {
-          console.log(`[Engine] >>> Received RETRY request for MsgID: ${key.id} from: ${key.remoteJid}`);
+          const jid = key.remoteJid!;
+          console.log(`[Engine] [v17] Received RETRY request from ${jid}. ID: ${key.id}`);
+
+          try {
+            if (this.sock?.signalRepository?.clearSession) {
+              await this.sock.signalRepository.clearSession(jid);
+              console.log(`[Engine] [v17] Cleared session for ${jid} PRIOR to retry fulfillment.`);
+            }
+          } catch (e) {
+            console.warn(`[Engine] [v17] Failed to clear session before retry:`, e);
+          }
 
           // 1. Check memory cache first
           const cached = sentMessagesCache.get(key.id!);
@@ -312,18 +322,24 @@ export class WhatsAppEngine {
             const isCiphertext = !!msg.messageStubType || (!msg.message && !msg.key.fromMe && !m?.protocolMessage && !m?.senderKeyDistributionMessage);
 
             if (isCiphertext) {
-              console.warn(`[Engine] [Signal Desync] Decryption failure from ${remoteJid}. Attempting AUTO-FIX...`);
+              console.warn(`[Engine] [v17] Decryption failure from ${remoteJid}. Forcing Handshake...`);
               try {
                 if (this.sock?.signalRepository?.clearSession) {
                   await this.sock.signalRepository.clearSession(remoteJid);
-                  // v16: Respond to force a new Signal handshake
-                  await this.sock.sendMessage(remoteJid, { text: '⚠️ عذراً، لا يمكنني قراء الرسالة بسبب خلل في التشفير. تم تصفير المحادثة تلقائياً، يرجى إعادة الإرسال الآن.' });
-                  console.log(`[Engine] [Signal Desync] Auto-fix notification sent to ${remoteJid}.`);
+
+                  // Send a "Nudge" to trigger the phone's Signal state update
+                  await this.sock.sendPresenceUpdate('composing', remoteJid);
+                  await new Promise(r => setTimeout(r, 1000));
+                  await this.sock.sendPresenceUpdate('paused', remoteJid);
+
+                  // Attempt to notify (This message will trigger a new session)
+                  await this.sock.sendMessage(remoteJid, { text: '⚠️ عذراً، تم إعادة ضبط تشفير المحادثة لتجاوز تعليق "الانتظار". يرجى إعادة إرسال رسالتك الآن.' });
+                  console.log(`[Engine] [v17] Handshake Force completed for ${remoteJid}.`);
                 }
               } catch (e) {
-                console.error('[Engine] [Signal Desync] Auto-fix failed:', e);
+                console.error('[Engine] [v17] Handshake Force failed:', e);
               }
-              return; // Skip processing for this encrypted/stale message
+              return; // Skip processing the broken message
             }
 
             const isUnmuteCommand = ['#bot', '#unmute', '!bot', '/bot', 'unmute', '#تفعيل'].includes(lowerText);
