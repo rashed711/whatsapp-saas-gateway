@@ -284,7 +284,11 @@ export class WhatsAppEngine {
               // --- Human Takeover Logic ---
               // If user replies manually, mute the bot for this chat
               const targetJid = msg.key.remoteJid;
-              if (targetJid && !targetJid.includes('@broadcast') && !targetJid.includes('@g.us')) {
+              const msgTimestamp = msg.messageTimestamp;
+              const now = Math.floor(Date.now() / 1000);
+              const isStale = msgTimestamp && (now - Number(msgTimestamp) > 60);
+
+              if (targetJid && !targetJid.includes('@broadcast') && !targetJid.includes('@g.us') && !isStale && type !== 'append') {
                 // Check for "Unmute" command
                 const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
                 if (text && (text.toLowerCase() === '#bot' || text.toLowerCase() === '#unmute')) {
@@ -295,7 +299,7 @@ export class WhatsAppEngine {
                     console.error('[Human Takeover] Failed to unmute chat:', err);
                   }
                 } else {
-                  console.log(`[Human Takeover] Manual reply detected. Muting bot for ${targetJid}`);
+                  console.log(`[Human Takeover] Manual reply detected for ${targetJid} (Time: ${msgTimestamp}). Muting bot.`);
                   try {
                     await storage.saveItem('muted_chats', {
                       sessionId: this.sessionId,
@@ -307,6 +311,8 @@ export class WhatsAppEngine {
                     console.error('[Human Takeover] Failed to mute chat:', err);
                   }
                 }
+              } else if (isStale) {
+                console.log(`[Human Takeover] Ignored stale manual reply from ${targetJid} (Age: ${now - Number(msgTimestamp)}s)`);
               }
               continue;
             }
