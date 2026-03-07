@@ -122,9 +122,10 @@ export class WhatsAppEngine {
             console.error('[Engine] [ERROR] DB Fetch failed for retry:', err);
           }
 
-          console.warn(`[Engine] [FAILURE] Could not fulfill retry for: ${key.id}. Message content missing in DB/Cache.`);
+          console.warn(`[Engine] [v17] [FAILURE] No content found for retry.`);
           return undefined;
         },
+        numPrekeys: 200, // v18: Massive pre-key surge to prevent handshake failure
         markOnlineOnConnect: true // v14: Helps refresh metadata
       });
 
@@ -150,41 +151,28 @@ export class WhatsAppEngine {
           if (phoneNumber) {
             console.log(`[Engine] Verifying uniqueness for number: ${phoneNumber}`);
 
-            // 1. Update this session with the phone number and Instance ID
             await storage.saveItem('sessions', {
               id: this.sessionId,
               instanceId: this.instanceId,
-              userId: this.userId, // Ensure userId is preserved
+              userId: this.userId,
               phoneNumber: phoneNumber,
               status: 'CONNECTED',
               updatedAt: new Date()
             });
 
-            // 2. Check for OTHER sessions with the same phone number
             const allSessions = await storage.getItems('sessions', { phoneNumber });
-
-            // Filter out CURRENT session
             const duplicates = allSessions.filter(s => s.id !== this.sessionId && s.status !== 'TERMINATED');
 
             if (duplicates.length > 0) {
               console.warn(`[Engine] SECURITY ALERT: Found ${duplicates.length} duplicate sessions for number ${phoneNumber}. Terminating them.`);
-
               for (const dup of duplicates) {
                 console.log(`[Engine] Killing duplicate session: ${dup.id}`);
-                // Mark as terminated in DB
                 await storage.saveItem('sessions', { id: dup.id, status: 'TERMINATED' });
-
-                // Ideally, we would emit an event to server.ts to kill the specific engine instance,
-                // but marking it TERMINATED in DB prevents it from being resumed on restart.
-                // The 440 conflict from WhatsApp will eventually disconnect the zombie if it's running.
               }
             }
           }
-          // -----------------------------------------------------
 
           this.status = 'CONNECTED';
-          // Delay resetting retryCount to ensure stability. 
-          // If we disconnect within 15s (e.g. 440 conflict), retryCount will NOT reset, forcing exponential backoff.
           if (this.connectionStabilityTimeout) clearTimeout(this.connectionStabilityTimeout);
           this.connectionStabilityTimeout = setTimeout(() => {
             this.retryCount = 0;
@@ -196,15 +184,12 @@ export class WhatsAppEngine {
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
           console.log(`[Engine] Connection closed for ${this.sessionId}. Reason: ${reason}`);
 
-          // Reset status to allow reconnection logic to pass the guard in startSession
-          // BUT only if not a fatal error
           if (this.status !== 'ERROR') {
             this.status = 'IDLE';
           }
           this.sock = null;
           if (this.connectionStabilityTimeout) clearTimeout(this.connectionStabilityTimeout);
 
-          // Detect Signal "Over 2000 messages into the future" error or session desync
           const errorMessage = lastDisconnect?.error?.message || '';
           const isFatalSignal = errorMessage.includes('Over 2000 messages into the future') ||
             errorMessage.includes('SessionError') ||
@@ -217,11 +202,9 @@ export class WhatsAppEngine {
             this.status = 'ERROR';
             await this.cleanupData();
             if (onError) onError('fatal_signal_error');
-            return; // Stop the loop
+            return;
           }
 
-          // Reason 440: Connection Replaced (Conflict)
-          // Reason 405: Unauthorized/Invalid Session. Reason 401: Logged Out.
           const isConflict = reason === 440;
           const isInvalidSession = reason === 405 || reason === 401 || reason === DisconnectReason.loggedOut;
 
@@ -230,53 +213,45 @@ export class WhatsAppEngine {
           if (isConflict) {
             this.conflictCount++;
             console.warn(`[Engine] CONFLICT detected for ${this.sessionId} (Count: ${this.conflictCount}).`);
-
             if (this.conflictCount > 3) {
-              console.error(`[Engine] Too many conflicts for ${this.sessionId}. Stopping to prevent loop.`);
               shouldReconnect = false;
             } else {
-              // Wait for DB consistency
               await new Promise(resolve => setTimeout(resolve, 3000));
-
               const currentSession = await storage.getItem('sessions', { id: this.sessionId });
-
-              // DEFINITIVE Ownership Check
               const isOwner = currentSession?.instanceId === this.instanceId;
-
               if (!isOwner || !currentSession || currentSession.status === 'TERMINATED' || currentSession.status === 'DISCONNECTED') {
-                console.log(`[Engine] Session ${this.sessionId} yield to newer instance. Local: ${this.instanceId.slice(0, 8)}, DB: ${currentSession?.instanceId?.slice(0, 8)}. Stopping.`);
                 shouldReconnect = false;
               } else {
                 const phoneNumber = currentSession.phoneNumber;
                 if (phoneNumber) {
                   const allSessions = await storage.getItems('sessions', { phoneNumber });
                   const newerActive = allSessions.find(s => s.id !== this.sessionId && s.status === 'CONNECTED');
-                  if (newerActive) {
-                    console.log(`[Engine] Newer active session found (${newerActive.id}). Yielding ${this.sessionId}.`);
-                    shouldReconnect = false;
-                  }
+                  if (newerActive) shouldReconnect = false;
                 }
               }
             }
           }
 
           if (shouldReconnect) {
-            const delay = isConflict ? 20000 : Math.min(Math.pow(2, this.retryCount) * 1000, 30000); // Wait longer on conflict
-            console.log(`[Engine] Reconnecting in ${delay}ms... (Attempt ${this.retryCount + 1})`);
-
+            const delay = isConflict ? 20000 : Math.min(Math.pow(2, this.retryCount) * 1000, 30000);
             this.retryCount++;
             setTimeout(() => this.startSession(onQR, onConnected), delay);
           } else {
-            console.log(`[Engine] Session ${this.sessionId} stopped. Reason: ${reason || 'Yield/Logout'}`);
             this.status = 'ERROR';
-            if (reason !== 440) await this.cleanupData(); // Don't wipe keys on conflict yield
+            if (reason !== 440) await this.cleanupData();
             if (onError) onError(reason || 'stopped');
           }
         }
       });
 
       // Handle Creds Update
-      this.sock.ev.on('creds.update', saveCreds);
+      this.sock.ev.on('creds.update', async () => {
+        try {
+          await saveCreds();
+        } catch (err) {
+          console.error('[Engine] Failed to save credentials:', err);
+        }
+      });
 
       // --- Contact Handling ---
 
