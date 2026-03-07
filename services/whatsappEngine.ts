@@ -307,18 +307,23 @@ export class WhatsAppEngine {
             const lowerText = textContent.toLowerCase();
             const hasMedia = !!(messageContent?.imageMessage || messageContent?.videoMessage || messageContent?.audioMessage || messageContent?.documentMessage);
 
-            // --- v14/v15: Auto Signal Repair for Decryption Issues ---
+            // --- v14/v15/v16: Auto Signal Repair for Decryption Issues ---
+            // If the message is ciphertext (Type 1), we can't read it. We must reset the session.
             const isCiphertext = !!msg.messageStubType || (!msg.message && !msg.key.fromMe && !m?.protocolMessage && !m?.senderKeyDistributionMessage);
 
             if (isCiphertext) {
-              console.warn(`[Engine] [Signal Desync] Potential decryption issue from ${remoteJid}. Attempting auto-fix...`);
+              console.warn(`[Engine] [Signal Desync] Decryption failure from ${remoteJid}. Attempting AUTO-FIX...`);
               try {
                 if (this.sock?.signalRepository?.clearSession) {
                   await this.sock.signalRepository.clearSession(remoteJid);
+                  // v16: Respond to force a new Signal handshake
+                  await this.sock.sendMessage(remoteJid, { text: '⚠️ عذراً، لا يمكنني قراء الرسالة بسبب خلل في التشفير. تم تصفير المحادثة تلقائياً، يرجى إعادة الإرسال الآن.' });
+                  console.log(`[Engine] [Signal Desync] Auto-fix notification sent to ${remoteJid}.`);
                 }
               } catch (e) {
                 console.error('[Engine] [Signal Desync] Auto-fix failed:', e);
               }
+              return; // Skip processing for this encrypted/stale message
             }
 
             const isUnmuteCommand = ['#bot', '#unmute', '!bot', '/bot', 'unmute', '#تفعيل'].includes(lowerText);
