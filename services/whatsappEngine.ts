@@ -291,26 +291,31 @@ export class WhatsAppEngine {
               const isStale = msgTimestamp && (now - Number(msgTimestamp) > 60);
 
               if (targetJid && !targetJid.includes('@broadcast') && !targetJid.includes('@g.us') && !isStale && type !== 'append') {
-                // Determine content to see if it's a real manual reply
                 const m = msg.message;
                 const messageContent = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m;
+
+                // 1. Ignore protocol/system messages
+                if (m?.protocolMessage || m?.senderKeyDistributionMessage || m?.peerDataOperationRequestMessage) continue;
+
                 const text = (messageContent?.conversation || messageContent?.extendedTextMessage?.text || messageContent?.imageMessage?.caption || '').trim();
                 const hasMedia = !!(messageContent?.imageMessage || messageContent?.videoMessage || messageContent?.audioMessage || messageContent?.documentMessage);
 
-                // If message has no content (e.g. sync stub), skip mute logic
-                if (!text && !hasMedia) {
-                  continue;
-                }
+                // 2. Only proceed if there's actual content
+                if (!text && !hasMedia) continue;
 
-                if (text.toLowerCase() === '#bot' || text.toLowerCase() === '#unmute') {
-                  console.log(`[Human Takeover] User re-enabled bot for ${targetJid}`);
+                // 3. Robust Command Check (Case Insensitive, variants)
+                const lowerText = text.toLowerCase();
+                const isUnmute = ['#bot', '#unmute', '!bot', '/bot', 'unmute', '#تفعيل'].includes(lowerText);
+
+                if (isUnmute) {
+                  console.log(`[Human Takeover] SYSTEM COMMAND: User re-enabled bot for ${targetJid}`);
                   try {
                     await storage.deleteItem('muted_chats', { sessionId: this.sessionId, chatId: targetJid });
                   } catch (err) {
                     console.error('[Human Takeover] Failed to unmute chat:', err);
                   }
                 } else {
-                  console.log(`[Human Takeover] Manual reply detected for ${targetJid} (Type: ${type}). Muting bot.`);
+                  console.log(`[Human Takeover] MANUAL REPLY detected. Chat: ${targetJid}, Content: "${text.substring(0, 50)}", Type: ${type}`);
                   try {
                     await storage.saveItem('muted_chats', {
                       sessionId: this.sessionId,
@@ -454,7 +459,8 @@ export class WhatsAppEngine {
               const isMuted = await storage.getItem('muted_chats', { sessionId: this.sessionId, chatId: remoteJid });
 
               if (isMuted) {
-                console.log(`[AutoReply] Skipped: Chat ${remoteJid} is in Muted Mode (Human Takeover).`);
+                // Still check for match to help debug, but don't send
+                console.log(`[AutoReply] [Muted Mode] Rule check for ${remoteJid} (skipped sending).`);
               } else {
                 // --- Robust Text Extraction ---
                 let textContent = '';
